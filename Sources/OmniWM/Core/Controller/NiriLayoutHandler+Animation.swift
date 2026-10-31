@@ -104,7 +104,10 @@ extension NiriLayoutHandler {
         }
 
         if !animationsOngoing {
-            scrollOverlays[monitor.id]?.finish(settling: scrollOverlayItems(in: wsId, at: Self.afterAnyMotion))
+            scrollOverlays[monitor.id]?.finish(
+                settling: scrollOverlayItems(in: wsId, at: Self.afterAnyMotion),
+                focus: scrollOverlayFocus(in: wsId)
+            )
             finalizeAnimation()
             controller.layoutRefreshController.hideInactiveWorkspaces(
                 activeWorkspaceIds: activeWorkspaceIds(controller: controller)
@@ -132,7 +135,7 @@ extension NiriLayoutHandler {
         guard !items.isEmpty, items.allSatisfy(\.keepsSize) else { return false }
         let overlay = scrollOverlay(for: monitor, controller: controller)
         let wasVisible = overlay.isVisible
-        let presented = overlay.present(items, monitor: monitor)
+        let presented = overlay.present(items, monitor: monitor, focus: scrollOverlayFocus(in: wsId))
         if presented, !wasVisible {
             // Showing the panel takes frames of its own, which must not skip the motion's start.
             let start = CACurrentMediaTime() + 1.0 / 60.0
@@ -164,6 +167,31 @@ extension NiriLayoutHandler {
                 hiddenAtRest: placement.hiddenAtRest
             )
         }
+    }
+
+    // The selection moves as the command is handled, so the border belongs on that window's
+    // image from the first frame. It is derived here rather than with the real border's rules,
+    // which hold the border back while a column scrolling in from off screen is still hidden.
+    private func scrollOverlayFocus(in wsId: WorkspaceDescriptor.ID) -> NiriScrollOverlay.FocusBorder? {
+        guard let controller else { return nil }
+        let world = WorldView(controller: controller)
+        let config = world.borderConfig
+        guard config.enabled,
+              let token = controller.workspaceManager.selectedManagedToken ?? world.borderFocusToken,
+              let entry = world.entry(for: token),
+              entry.workspaceId == wsId, entry.mode != .floating,
+              !world.hasPendingWindowClose(for: entry),
+              world.systemModalFocusToken != token,
+              world.suppressedFocusToken != token,
+              let handle = controller.workspaceManager.handle(for: token)
+        else { return nil }
+        let sample = controller.surfaceReconciler.cornerSample(for: token)
+        return NiriScrollOverlay.FocusBorder(
+            handle: handle,
+            config: config,
+            cornerRadii: sample?.radii ?? .systemDefault,
+            cornerContour: sample?.contour
+        )
     }
 
     func scrollOverlayPresents(for workspaceId: WorkspaceDescriptor.ID) -> Bool {

@@ -273,6 +273,11 @@ final class BorderSurfaceApplier {
         cornerTargetToken = token
     }
 
+    /// The corner sample last resolved for a window, for drawing its border elsewhere.
+    func cornerSample(for token: WindowToken) -> WindowCornerSample? {
+        fallbackCornerSample(for: token)
+    }
+
     private func fallbackCornerSample(for token: WindowToken) -> WindowCornerSample? {
         if let cachedCornerSample, cachedCornerSample.token == token {
             return cachedCornerSample.sample

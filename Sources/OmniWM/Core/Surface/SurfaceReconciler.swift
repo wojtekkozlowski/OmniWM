@@ -31,6 +31,10 @@ final class SurfaceReconciler {
     let nativeFullscreenState = NativeFullscreenSurfaceState()
     private(set) var appliedScene = DesiredSurfaceScene.empty
 
+    func cornerSample(for token: WindowToken) -> WindowCornerSample? {
+        borderApplier.cornerSample(for: token)
+    }
+
     func nativeFullscreenDiagnosticsSnapshot() -> FullscreenSurfaceDiagnosticsSnapshot {
         nativeFullscreenState.diagnostics(applied: appliedScene.placeholders, controller: controller)
     }

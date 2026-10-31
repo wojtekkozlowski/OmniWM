@@ -31,6 +31,14 @@ final class NiriScrollOverlay {
         }
     }
 
+    /// The focused window's border, drawn around its image while the windows move.
+    struct FocusBorder: Equatable {
+        let handle: WindowHandle
+        let config: BorderConfig
+        let cornerRadii: WindowCornerRadii
+        let cornerContour: WindowCornerContour?
+    }
+
     private static let updateTimeout: TimeInterval = 0.4
     private static let handoffTimeout: TimeInterval = 0.3
     private static let handoffTolerance: CGFloat = 3
@@ -50,6 +58,9 @@ final class NiriScrollOverlay {
     private var openContainer: CALayer?
     private var clippedContainer: CALayer?
     private var clipMask: CALayer?
+    private var focusBorder: BorderLayerTree?
+    private var drawnFocusBorder: FocusBorder?
+    private var drawnFocusBorderSize: CGSize = .zero
     private var lastPresentedAt: TimeInterval = 0
     private var watchdog: Task<Void, Never>?
     private var handoff: Task<Void, Never>?
@@ -170,7 +181,7 @@ final class NiriScrollOverlay {
         capture.remove(token: token)
     }
 
-    func present(_ items: [Item], monitor: Monitor) -> Bool {
+    func present(_ items: [Item], monitor: Monitor, focus: FocusBorder? = nil) -> Bool {
         let visible = monitor.visibleFrame
         let swept = items.filter { $0.isSwept(in: visible) }
         if panel == nil {
@@ -192,11 +203,14 @@ final class NiriScrollOverlay {
         handoff = nil
         lastPresentedAt = CACurrentMediaTime()
         let travel = items.map(\.remainingTravel).max() ?? 0
-        place(swept, keeping: items, atFinalFrames: false, clip: Self.clipRect(for: items, in: visible, offset: travel))
+        place(
+            swept, keeping: items, atFinalFrames: false,
+            clip: Self.clipRect(for: items, in: visible, offset: travel), focus: focus
+        )
         return true
     }
 
-    func finish(settling items: [Item]) {
+    func finish(settling items: [Item], focus: FocusBorder? = nil) {
         guard panel != nil else { return }
         watchdog?.cancel()
         watchdog = nil
@@ -205,7 +219,10 @@ final class NiriScrollOverlay {
             stop()
             return
         }
-        place(expected, keeping: items, atFinalFrames: true, clip: Self.clipRect(for: items, in: panelFrame, offset: 0))
+        place(
+            expected, keeping: items, atFinalFrames: true,
+            clip: Self.clipRect(for: items, in: panelFrame, offset: 0), focus: focus
+        )
         handoff?.cancel()
         handoff = Task { [weak self] in
             let deadline = CACurrentMediaTime() + Self.handoffTimeout
@@ -237,6 +254,9 @@ final class NiriScrollOverlay {
         openContainer = nil
         clippedContainer = nil
         clipMask = nil
+        focusBorder = nil
+        drawnFocusBorder = nil
+        drawnFocusBorderSize = .zero
         CATransaction.commit()
     }
 
@@ -383,7 +403,9 @@ final class NiriScrollOverlay {
         }
     }
 
-    private func place(_ items: [Item], keeping known: [Item], atFinalFrames: Bool, clip: CGRect) {
+    private func place(
+        _ items: [Item], keeping known: [Item], atFinalFrames: Bool, clip: CGRect, focus: FocusBorder?
+    ) {
         guard let root = panel?.contentView?.layer, let openContainer, let clippedContainer else { return }
         let scale = root.contentsScale
         CATransaction.begin()
@@ -414,7 +436,44 @@ final class NiriScrollOverlay {
             layer.frame = (atFinalFrames ? item.frame : item.presented)
                 .offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
         }
+        placeFocusBorder(focus, scale: scale)
         CATransaction.commit()
+    }
+
+    // The real border is a panel ordered just under the focused window, so this panel covers it
+    // while the images move, and it only reappears once the windows have arrived. Drawing the
+    // border around the focused image keeps it in view through the whole motion.
+    private func placeFocusBorder(_ focus: FocusBorder?, scale: CGFloat) {
+        guard let focus, let layer = layers[focus.handle], let container = layer.superlayer else {
+            focusBorder?.containerLayer.removeFromSuperlayer()
+            drawnFocusBorder = nil
+            return
+        }
+        let tree: BorderLayerTree
+        if let focusBorder {
+            tree = focusBorder
+        } else {
+            guard BorderLayerTree.isAvailable else { return }
+            tree = BorderLayerTree()
+            tree.containerLayer.zPosition = 1
+            focusBorder = tree
+        }
+        if tree.containerLayer.superlayer !== container {
+            container.addSublayer(tree.containerLayer)
+        }
+        let geometry = focus.config.resolvedGeometry(for: layer.frame, scale: scale)
+        let local = geometry.localized()
+        tree.containerLayer.frame = geometry.surfaceFrame
+        tree.place(targetFrame: local.targetFrame, surfaceFrame: local.surfaceFrame, relativeTo: .zero)
+        guard drawnFocusBorder != focus || drawnFocusBorderSize != geometry.surfaceFrame.size else { return }
+        let color = BorderEffectLayers.cgColor(focus.config.color)
+        tree.updateBorder(geometry: local, cornerRadii: focus.cornerRadii, color: color, scale: scale)
+        tree.updateEffects(
+            geometry: local, cornerRadii: focus.cornerRadii, config: focus.config,
+            baseColor: color, scale: scale, cornerContour: focus.cornerContour
+        )
+        drawnFocusBorder = focus
+        drawnFocusBorderSize = geometry.surfaceFrame.size
     }
 
     private func updatePreview(_ frame: OverviewPreviewFrame?, for handle: WindowHandle) {
