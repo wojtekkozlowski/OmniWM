@@ -33,11 +33,16 @@ ditto -x -k "$WORK/$ASSET" "$WORK/unpacked"
 echo "Quitting any running OmniWM..."
 osascript -e 'tell application id "com.barut.OmniWM" to quit' >/dev/null 2>&1 || true
 osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+was_running=0
 for _ in {1..40}; do
   pgrep -x OmniWM >/dev/null || break
+  was_running=1
   sleep 0.25
 done
 pgrep -x OmniWM >/dev/null && fail "OmniWM is still running; quit it and run this again"
+# The quitting copy restores the menu bar and the windows it managed; a copy launched
+# before macOS has settled can read a screen geometry that is already out of date.
+[ "$was_running" = 1 ] && sleep 1.5
 
 mkdir -p "$HOME/Applications"
 rm -rf "$APP"

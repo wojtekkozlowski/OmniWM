@@ -402,4 +402,10 @@ final class WorkspaceSwipePreviewPanel: NSPanel {
     override var canBecomeMain: Bool {
         false
     }
+
+    // The panel covers a frame of its own choosing, and its contents are placed relative to
+    // that frame, so AppKit must not move it clear of the menu bar or the Dock.
+    override func constrainFrameRect(_ frameRect: NSRect, to _: NSScreen?) -> NSRect {
+        frameRect
+    }
 }

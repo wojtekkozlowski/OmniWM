@@ -338,11 +338,17 @@ final class NiriScrollOverlay {
     }
 
     private func show(backdropImage: CGImage, monitor: Monitor) {
-        let frame = monitor.visibleFrame
-        let panel = WorkspaceSwipePreviewPanel(frame: frame)
+        let requested = monitor.visibleFrame
+        let panel = WorkspaceSwipePreviewPanel(frame: requested)
         // Above managed windows but under the Dock, menu bar and workspace bar, which can sit
         // inside this frame on a secondary display.
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
+        // Everything is placed relative to where the panel really is, so a frame AppKit adjusted
+        // would still show the images over the windows they stand for.
+        let frame = panel.frame
+        if frame != requested {
+            FallbackFiringRecorder.shared.note(.monitor, "niriScrollOverlayPanelFrameAdjusted")
+        }
         let root = CALayer()
         root.frame = CGRect(origin: .zero, size: frame.size)
         root.masksToBounds = true
