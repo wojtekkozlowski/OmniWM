@@ -45,7 +45,7 @@ GitHub pauses scheduled workflows after 60 days without a push to the fork; the 
 
 ## Releasing
 
-Releases are built on a Mac with Xcode 27 and the toolchain `Scripts/dev-tools.env` names. Build with the dev app name and bundle id, zip the app together with its checksum, and publish them as `OmniWM-Dev-arm64.zip` and `OmniWM-Dev-arm64.zip.sha256` on a release tagged `smooth-scroll-vN`; the install script always takes the latest release.
+Releases are built on a Mac with Xcode 27 and the toolchain `Scripts/dev-tools.env` names. Tag the commit `smooth-scroll-vN` first, since the build takes its label from the nearest such tag (the status menu shows `smooth-scroll-v3` for a release, `smooth-scroll-v3-2-gabcdef0` for a build two commits later, and the bare commit with `-dirty` for uncommitted changes). Then build with the dev app name and bundle id, zip the app together with its checksum, push the tag, and publish the zip and checksum as `OmniWM-Dev-arm64.zip` and `OmniWM-Dev-arm64.zip.sha256` on the release for that tag; the install script always takes the latest release.
 
 ```bash
 OMNIWM_APP_NAME="OmniWM Dev" OMNIWM_BUNDLE_ID=com.barut.OmniWM.dev OMNIWM_SIGNING_IDENTITY=omniwm ./Scripts/package-app.sh release dev

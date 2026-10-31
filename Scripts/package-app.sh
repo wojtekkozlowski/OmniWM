@@ -58,10 +58,9 @@ if command -v plutil >/dev/null 2>&1; then
     plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP_DIR/Contents/Info.plist"
     plutil -replace CFBundleName -string "$APP_NAME" "$APP_DIR/Contents/Info.plist"
     plutil -replace CFBundleDisplayName -string "$APP_NAME" "$APP_DIR/Contents/Info.plist"
-    DEV_BUILD="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo SNAPSHOT)"
-    if [ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]; then
-      DEV_BUILD="$DEV_BUILD-dirty"
-    fi
+    # The fork's release name when HEAD is tagged, such as smooth-scroll-v3; the
+    # tag plus distance and commit after it; and the bare commit before any tag.
+    DEV_BUILD="$(git -C "$ROOT_DIR" describe --tags --match 'smooth-scroll-v*' --always --dirty 2>/dev/null || echo SNAPSHOT)"
     plutil -replace OMNIWMDevBuild -string "$DEV_BUILD" "$APP_DIR/Contents/Info.plist"
   fi
 fi
