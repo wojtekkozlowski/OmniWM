@@ -1,0 +1,95 @@
+name: Sync from upstream
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Merge and build, but push nothing, even when already up to date
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Merge, build and push
+    if: github.repository == 'wojtekkozlowski/OmniWM'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: smooth-scroll
+          fetch-depth: 0
+          # The default token cannot push changes to workflow files, which upstream makes.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream main
+        id: merge
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          git remote add upstream https://github.com/OmniNull/OmniWM.git
+          git fetch --no-tags upstream main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already contains upstream main."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            if ! git merge --no-edit upstream/main; then
+              echo "::error::Merging upstream main conflicts. Resolve these by hand:"
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$DRY_RUN" = "true" ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/smooth-scroll)" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select Xcode
+        if: steps.merge.outputs.build == 'true'
+        run: |
+          xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then
+            echo "::error::This runner has no Xcode 27, which the build needs."
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/setup-swift
+        if: steps.merge.outputs.build == 'true'
+
+      - name: Download GhosttyKit
+        if: steps.merge.outputs.build == 'true'
+        run: |
+          url="$(grep '^OMNIWM_GHOSTTY_DOWNLOAD_URL=' Scripts/dev-tools.env | cut -d= -f2-)"
+          sha="$(grep '^OMNIWM_GHOSTTY_ZIP_SHA256=' Scripts/dev-tools.env | cut -d= -f2-)"
+          curl -fsSL "$url" -o ghostty.zip
+          echo "$sha  ghostty.zip" | shasum -a 256 -c -
+          mkdir -p Frameworks
+          unzip -q ghostty.zip -d Frameworks
+          rm ghostty.zip
+          ./Scripts/ghostty-preflight.sh verify
+
+      - name: Build
+        if: steps.merge.outputs.build == 'true'
+        run: |
+          LIBRARY_PATH="$(./Scripts/ghostty-preflight.sh print-library-dir)" swift build --arch arm64
+
+      - name: Push
+        if: inputs.dry_run != true
+        env:
+          CHANGED: ${{ steps.merge.outputs.changed }}
+        run: |
+          git push origin upstream/main:refs/heads/main
+          if [ "$CHANGED" = "true" ]; then
+            git push origin HEAD:smooth-scroll
+          fi

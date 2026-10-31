@@ -32,6 +32,12 @@ defaults delete com.barut.OmniWM.dev OmniWMExperimentScrollOverlay
 defaults write com.barut.OmniWM.dev OmniWMExperimentScrollOverlay -bool true
 ```
 
+## Keeping up with upstream
+
+`.github/workflows/sync-upstream.yml` merges `OmniNull/OmniWM` main into `smooth-scroll` daily, builds the result, and pushes only if it builds. It also moves this fork's `main` to match upstream. A conflict or a broken build fails the run, and nothing is pushed.
+
+It needs a repository secret named `SYNC_TOKEN`: a fine-grained token for this repository only, with read and write access to Contents and Workflows. Syncing does not publish a release, so installed apps change only when a release is published.
+
 ## Known limitations of the overlay
 
 - Motions that change a window's size use the Accessibility path, including resizing a column, moving a window into or out of a stack, and a close that resizes a neighbour. Opening a window does too, because it has no captured image yet.
