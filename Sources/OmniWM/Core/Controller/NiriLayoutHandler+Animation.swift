@@ -75,12 +75,10 @@ extension NiriLayoutHandler {
             controller.resizeOverlay.settleOnLayout(in: wsId)
         }
 
-        if viewportMotionRunning, !windowAnimationsRunning, !columnAnimationsRunning,
-           presentScrollOverlay(wsId: wsId, state: state, monitor: monitor, at: targetTime)
-        {
-            return
-        }
-        if windowAnimationsRunning || columnAnimationsRunning {
+        if animationsOngoing {
+            if presentScrollOverlay(wsId: wsId, engine: engine, monitor: monitor, at: targetTime) {
+                return
+            }
             scrollOverlays[monitor.id]?.stop()
         }
 
@@ -102,7 +100,7 @@ extension NiriLayoutHandler {
         }
 
         if !animationsOngoing {
-            scrollOverlays[monitor.id]?.finish(settling: scrollOverlayItems(in: wsId))
+            scrollOverlays[monitor.id]?.finish(settling: scrollOverlayItems(in: wsId, at: Self.afterAnyMotion))
             finalizeAnimation()
             controller.layoutRefreshController.hideInactiveWorkspaces(
                 activeWorkspaceIds: activeWorkspaceIds(controller: controller)
@@ -117,7 +115,7 @@ extension NiriLayoutHandler {
 
     private func presentScrollOverlay(
         wsId: WorkspaceDescriptor.ID,
-        state: ViewportState,
+        engine: NiriLayoutEngine,
         monitor: Monitor,
         at time: TimeInterval
     ) -> Bool {
@@ -125,40 +123,48 @@ extension NiriLayoutHandler {
               controller.settings.monitors.effectiveOrientation(for: monitor) == .horizontal
         else { return false }
         let driver = controller.workspaceManager.animationDriver
-        guard !driver.hasGesture(in: wsId),
-              let live = driver.renderOffsets(in: wsId, semanticOffset: state.viewOffset, at: time).liveOffset
-        else { return false }
-        let overlay = scrollOverlays[monitor.id] ?? {
-            let created = NiriScrollOverlay(ownedWindowRegistry: controller.ownedWindowRegistry)
-            scrollOverlays[monitor.id] = created
-            return created
-        }()
+        guard !driver.hasGesture(in: wsId) else { return false }
+        let items = scrollOverlayItems(in: wsId, at: time)
+        guard !items.isEmpty, items.allSatisfy(\.keepsSize) else { return false }
+        let overlay = scrollOverlay(for: monitor, controller: controller)
         let wasVisible = overlay.isVisible
-        let presented = overlay.present(
-            scrollOverlayItems(in: wsId),
-            offset: state.viewOffset - live,
-            monitor: monitor
-        )
+        let presented = overlay.present(items, monitor: monitor)
         if presented, !wasVisible {
-            // Showing the panel takes frames of its own, which must not skip the scroll's start.
-            driver.holdMotionStart(in: wsId, until: CACurrentMediaTime() + 1.0 / 60.0)
+            // Showing the panel takes frames of its own, which must not skip the motion's start.
+            let start = CACurrentMediaTime() + 1.0 / 60.0
+            driver.holdMotionStart(in: wsId, until: start)
+            engine.holdAnimations(in: wsId, until: start)
         }
         return presented
     }
 
-    private func scrollOverlayItems(in wsId: WorkspaceDescriptor.ID) -> [NiriScrollOverlay.Item] {
-        guard let controller, let frames = stripFrames(in: wsId) else { return [] }
+    private func scrollOverlay(for monitor: Monitor, controller: WMController) -> NiriScrollOverlay {
+        if let existing = scrollOverlays[monitor.id] { return existing }
+        let created = NiriScrollOverlay(ownedWindowRegistry: controller.ownedWindowRegistry)
+        scrollOverlays[monitor.id] = created
+        return created
+    }
+
+    private func scrollOverlayItems(in wsId: WorkspaceDescriptor.ID, at time: TimeInterval) -> [NiriScrollOverlay.Item] {
+        guard let controller, let placements = stripPlacements(in: wsId, at: time) else { return [] }
         return controller.workspaceManager.entries(in: wsId).compactMap { entry in
             guard entry.mode != .floating,
-                  let placement = frames[entry.token],
+                  let placement = placements[entry.token],
                   let handle = controller.workspaceManager.handle(for: entry.token)
             else { return nil }
             return NiriScrollOverlay.Item(
                 handle: handle,
                 windowId: entry.windowId,
                 frame: placement.frame,
+                presented: placement.presented,
                 hiddenAtRest: placement.hiddenAtRest
             )
+        }
+    }
+
+    func scrollOverlayWindowRemoved(_ token: WindowToken) {
+        for overlay in scrollOverlays.values {
+            overlay.remove(token: token)
         }
     }
 
@@ -170,12 +176,8 @@ extension NiriLayoutHandler {
               let workspace = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id),
               controller.workspaceManager.activeLayoutKind(for: workspace.id) == .niri
         else { return }
-        let overlay = scrollOverlays[monitor.id] ?? {
-            let created = NiriScrollOverlay(ownedWindowRegistry: controller.ownedWindowRegistry)
-            scrollOverlays[monitor.id] = created
-            return created
-        }()
-        overlay.warm(scrollOverlayItems(in: workspace.id), monitor: monitor)
+        let overlay = scrollOverlay(for: monitor, controller: controller)
+        overlay.warm(scrollOverlayItems(in: workspace.id, at: Self.afterAnyMotion), monitor: monitor)
     }
 
     private func activeWorkspaceIds(controller: WMController) -> Set<WorkspaceDescriptor.ID> {

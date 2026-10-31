@@ -307,7 +307,8 @@ extension NiriContainer {
             initialVelocity: currentVelocity,
             startTime: now,
             config: config,
-            displayRefreshRate: displayRefreshRate
+            displayRefreshRate: displayRefreshRate,
+            awaitsFirstTick: true
         )
         moveAnimation = MoveAnimation(
             animation: animation,
@@ -331,6 +332,7 @@ extension NiriContainer {
 
     func tickMoveAnimation(at time: TimeInterval) -> Bool {
         guard let anim = moveAnimation else { return false }
+        anim.animation.noteDisplayTick(time)
         if anim.isComplete(at: time) {
             moveAnimation = nil
             moveAnimationOrientation = nil
@@ -389,7 +391,8 @@ extension NiriContainer {
             initialVelocity: currentVel,
             startTime: now,
             config: config,
-            displayRefreshRate: displayRefreshRate
+            displayRefreshRate: displayRefreshRate,
+            awaitsFirstTick: true
         )
         targetWidth = newWidth
         return true
@@ -397,6 +400,7 @@ extension NiriContainer {
 
     func tickWidthAnimation(at time: TimeInterval) -> Bool {
         guard let anim = widthAnimation else { return false }
+        anim.noteDisplayTick(time)
 
         let lowerEndpoint = min(CGFloat(anim.from), targetWidth ?? CGFloat(anim.from))
         cachedWidth = max(CGFloat(anim.value(at: time)), lowerEndpoint)
@@ -414,6 +418,11 @@ extension NiriContainer {
 
     var hasWidthAnimationRunning: Bool {
         widthAnimation != nil
+    }
+
+    func holdAnimations(until time: TimeInterval) {
+        moveAnimation?.animation.holdStart(until: time)
+        widthAnimation?.holdStart(until: time)
     }
 
     func stopAnimations() {

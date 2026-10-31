@@ -139,7 +139,8 @@ class NiriWindow: NiriNode {
                 initialVelocity: currentVelX,
                 startTime: now,
                 config: config,
-                displayRefreshRate: displayRefreshRate
+                displayRefreshRate: displayRefreshRate,
+                awaitsFirstTick: true
             )
             moveXAnimation = MoveAnimation(animation: anim, fromOffset: totalOffsetX)
         }
@@ -151,7 +152,8 @@ class NiriWindow: NiriNode {
                 initialVelocity: currentVelY,
                 startTime: now,
                 config: config,
-                displayRefreshRate: displayRefreshRate
+                displayRefreshRate: displayRefreshRate,
+                awaitsFirstTick: true
             )
             moveYAnimation = MoveAnimation(animation: anim, fromOffset: totalOffsetY)
             moveYContainmentFrame = yContainmentFrame
@@ -161,6 +163,7 @@ class NiriWindow: NiriNode {
     func tickMoveAnimations(at time: TimeInterval) -> Bool {
         var running = false
         if let moveX = moveXAnimation {
+            moveX.animation.noteDisplayTick(time)
             if moveX.isComplete(at: time) {
                 moveXAnimation = nil
             } else {
@@ -168,6 +171,7 @@ class NiriWindow: NiriNode {
             }
         }
         if let moveY = moveYAnimation {
+            moveY.animation.noteDisplayTick(time)
             if moveY.isComplete(at: time) {
                 moveYAnimation = nil
                 moveYContainmentFrame = nil
@@ -176,6 +180,11 @@ class NiriWindow: NiriNode {
             }
         }
         return running
+    }
+
+    func holdMoveAnimations(until time: TimeInterval) {
+        moveXAnimation?.animation.holdStart(until: time)
+        moveYAnimation?.animation.holdStart(until: time)
     }
 
     func stopMoveAnimations() {

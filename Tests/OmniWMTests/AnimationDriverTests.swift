@@ -30,63 +30,34 @@ final class AnimationDriverTests: XCTestCase {
         return next
     }
 
-    func testScrollOverlaySweepsWindowsThatEnterDuringTheScroll() {
-        let visible = CGRect(x: 0, y: 0, width: 1000, height: 800)
-        let entering = CGRect(x: 1200, y: 0, width: 500, height: 800)
-        XCTAssertTrue(NiriScrollOverlay.isSwept(entering, offset: -300, in: visible))
-        XCTAssertFalse(NiriScrollOverlay.isSwept(entering, offset: 100, in: visible))
-        XCTAssertEqual(
-            NiriScrollOverlay.presentedFrame(entering, offset: -300),
-            CGRect(x: 900, y: 0, width: 500, height: 800)
-        )
-    }
-
-    func testSpringHoldsItsStartUntilTheFirstDisplayTick() throws {
-        let driver = AnimationDriver()
-        var next = state(viewOffset: 0)
-        next.springOffset(to: 900)
-        driver.reconcileViewportCommit(
-            workspaceId: workspaceId,
-            previous: state(viewOffset: 0),
-            next: next,
-            transition: next.offsetTransition,
-            at: 100
-        )
-        func offset(at time: TimeInterval) throws -> CGFloat {
-            try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: time).liveOffset)
+    func testScrollOverlaySweepsWindowsThatEnterDuringTheMotion() {
+        func item(from presented: CGRect) -> NiriScrollOverlay.Item {
+            NiriScrollOverlay.Item(
+                handle: WindowHandle(id: WindowToken(pid: 1, windowId: 9)),
+                windowId: 9,
+                frame: CGRect(x: 1200, y: 0, width: 500, height: 800),
+                presented: presented,
+                hiddenAtRest: false
+            )
         }
+        let visible = CGRect(x: 0, y: 0, width: 1000, height: 800)
 
-        XCTAssertEqual(try offset(at: 100.065), 0, accuracy: 0.001)
-
-        let firstTick = 100.07
-        XCTAssertEqual(driver.tickResult(in: workspaceId, at: firstTick), .running)
-        XCTAssertEqual(try offset(at: firstTick), 0, accuracy: 0.001)
-
-        let secondTick = firstTick + 1.0 / 120.0
-        XCTAssertEqual(driver.tickResult(in: workspaceId, at: secondTick), .running)
-        let second = try offset(at: secondTick)
-        XCTAssertGreaterThan(second, 0)
-        XCTAssertLessThan(second, 45)
+        let entering = item(from: CGRect(x: 900, y: 0, width: 500, height: 800))
+        XCTAssertTrue(entering.isSwept(in: visible))
+        XCTAssertEqual(entering.remainingTravel, 300)
+        XCTAssertTrue(entering.keepsSize)
+        XCTAssertFalse(item(from: CGRect(x: 1300, y: 0, width: 500, height: 800)).isSwept(in: visible))
+        XCTAssertFalse(item(from: CGRect(x: 900, y: 0, width: 400, height: 800)).keepsSize)
     }
 
-    func testSpringNeverReadsBehindItsLatestDisplayTick() throws {
-        let driver = AnimationDriver()
-        var next = state(viewOffset: 0)
-        next.springOffset(to: 900)
-        driver.reconcileViewportCommit(
-            workspaceId: workspaceId,
-            previous: state(viewOffset: 0),
-            next: next,
-            transition: next.offsetTransition,
-            at: 100
-        )
-        _ = driver.tickResult(in: workspaceId, at: 100)
-        _ = driver.tickResult(in: workspaceId, at: 100.05)
-        let ticked = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.05).liveOffset)
+    func testScrollOverlayRejectsImagesOfAnotherShape() {
+        let frame = CGRect(x: 0, y: 0, width: 870, height: 1092)
 
-        let between = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.04).liveOffset)
-
-        XCTAssertEqual(between, ticked, accuracy: 0.001)
+        XCTAssertTrue(NiriScrollOverlay.imageFits(imageSize: CGSize(width: 1740, height: 2184), frame: frame))
+        XCTAssertTrue(NiriScrollOverlay.imageFits(imageSize: CGSize(width: 1741, height: 2184), frame: frame))
+        XCTAssertFalse(NiriScrollOverlay.imageFits(imageSize: CGSize(width: 1775, height: 2184), frame: frame))
+        XCTAssertFalse(NiriScrollOverlay.imageFits(imageSize: CGSize(width: 2622, height: 2184), frame: frame))
+        XCTAssertFalse(NiriScrollOverlay.imageFits(imageSize: .zero, frame: frame))
     }
 
     func testScrollOverlayClipsColumnsHiddenAtRestWhereTheyFinish() {
@@ -95,6 +66,7 @@ final class AnimationDriverTests: XCTestCase {
                 handle: WindowHandle(id: WindowToken(pid: 1, windowId: windowId)),
                 windowId: windowId,
                 frame: frame,
+                presented: frame,
                 hiddenAtRest: hiddenAtRest
             )
         }
@@ -137,6 +109,23 @@ final class AnimationDriverTests: XCTestCase {
 
         XCTAssertEqual(held, 0, accuracy: 0.001)
         XCTAssertGreaterThan(moving, 0)
+    }
+
+    func testMoveAnimationHoldsItsStartUntilTheFirstDisplayTick() {
+        let window = NiriWindow(token: WindowToken(pid: 1, windowId: 77))
+        window.animateMoveFrom(
+            displacement: CGPoint(x: 400, y: 0),
+            clock: nil,
+            config: .niriHorizontalViewMovement,
+            displayRefreshRate: 120,
+            animated: true
+        )
+        let start = CACurrentMediaTime()
+
+        XCTAssertEqual(window.renderOffset(at: start + 0.1).x, 400, accuracy: 0.5)
+        XCTAssertTrue(window.tickMoveAnimations(at: start + 0.1))
+        XCTAssertEqual(window.renderOffset(at: start + 0.1).x, 400, accuracy: 0.5)
+        XCTAssertLessThan(window.renderOffset(at: start + 0.15).x, 400)
     }
 
     func testSpringResumesWhenNoDisplayTickArrives() throws {

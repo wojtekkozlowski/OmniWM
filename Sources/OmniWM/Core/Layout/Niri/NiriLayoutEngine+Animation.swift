@@ -351,6 +351,16 @@ extension NiriLayoutEngine {
         return anyAnimationStarted
     }
 
+    func holdAnimations(in workspaceId: WorkspaceDescriptor.ID, until time: TimeInterval) {
+        guard let root = root(for: workspaceId) else { return }
+        for window in root.allWindows {
+            window.holdMoveAnimations(until: time)
+        }
+        for column in root.columns {
+            column.holdAnimations(until: time)
+        }
+    }
+
     func hasAnyWindowAnimationsRunning(in workspaceId: WorkspaceDescriptor.ID) -> Bool {
         guard let root = root(for: workspaceId) else { return false }
         return root.allWindows.contains { $0.hasMoveAnimationsRunning }

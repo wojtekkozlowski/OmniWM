@@ -14,7 +14,21 @@ final class NiriScrollOverlay {
         let handle: WindowHandle
         let windowId: Int
         let frame: CGRect
+        let presented: CGRect
         let hiddenAtRest: Bool
+
+        var keepsSize: Bool {
+            abs(frame.width - presented.width) <= 1 && abs(frame.height - presented.height) <= 1
+        }
+
+        var remainingTravel: CGFloat {
+            abs(frame.minX - presented.minX)
+        }
+
+        // The motion runs from `presented` to `frame`, so this is everywhere the window passes.
+        func isSwept(in visible: CGRect) -> Bool {
+            frame.union(presented).intersects(visible)
+        }
     }
 
     private static let updateTimeout: TimeInterval = 0.4
@@ -23,6 +37,7 @@ final class NiriScrollOverlay {
     private static let desktopRefreshInterval: TimeInterval = 30
     private static let clipOpeningDistance: CGFloat = 200
     private static let previewRefreshInterval: TimeInterval = 20
+    private static let maximumShapeMismatch: CGFloat = 2
 
     private let ownedWindowRegistry: OwnedWindowRegistry
     private let capture: OverviewThumbnailCapture
@@ -73,13 +88,22 @@ final class NiriScrollOverlay {
         stop()
     }
 
-    static func presentedFrame(_ frame: CGRect, offset: CGFloat) -> CGRect {
-        frame.offsetBy(dx: offset, dy: 0)
+    // A window can change shape after its capture, for example by moving to a display with
+    // another resolution, and stretching that image to the new frame would visibly squash it.
+    static func imageFits(imageSize: CGSize, frame: CGRect) -> Bool {
+        guard imageSize.width > 0, imageSize.height > 0, frame.width > 0, frame.height > 0 else { return false }
+        let aspect = imageSize.width / imageSize.height
+        return abs(frame.height * aspect - frame.width) <= maximumShapeMismatch
+            && abs(frame.width / aspect - frame.height) <= maximumShapeMismatch
     }
 
-    // The scroll runs from the current offset to zero, so this is everywhere a window passes.
-    static func isSwept(_ frame: CGRect, offset: CGFloat, in visible: CGRect) -> Bool {
-        frame.union(presentedFrame(frame, offset: offset)).intersects(visible)
+    private func fittingPreview(for item: Item) -> OverviewPreviewFrame? {
+        guard let preview = capture.preview(for: item.handle) else { return nil }
+        let imageSize = CGSize(
+            width: CGFloat(preview.surface.width) * preview.contentsRect.width,
+            height: CGFloat(preview.surface.height) * preview.contentsRect.height
+        )
+        return Self.imageFits(imageSize: imageSize, frame: item.frame) ? preview : nil
     }
 
     // Columns the settled layout hides would otherwise peek into the screen edges until the
@@ -106,7 +130,7 @@ final class NiriScrollOverlay {
         // they are only refreshed occasionally between scrolls.
         let now = CACurrentMediaTime()
         let due = items.filter {
-            capture.preview(for: $0.handle) == nil
+            fittingPreview(for: $0) == nil
                 || now - (previewRequestedAt[$0.handle] ?? -.infinity) >= Self.previewRefreshInterval
         }
         for item in due {
@@ -120,19 +144,17 @@ final class NiriScrollOverlay {
         capture.remove(token: token)
     }
 
-    func present(
-        _ items: [Item],
-        offset: CGFloat,
-        monitor: Monitor
-    ) -> Bool {
+    func present(_ items: [Item], monitor: Monitor) -> Bool {
         let visible = monitor.visibleFrame
-        let swept = items.filter { Self.isSwept($0.frame, offset: offset, in: visible) }
+        let swept = items.filter { $0.isSwept(in: visible) }
+        guard swept.allSatisfy({ fittingPreview(for: $0) != nil }) else {
+            if panel == nil {
+                request(swept, monitor: monitor, firstFrameOnly: true)
+            }
+            return false
+        }
         if panel == nil {
             guard hasCaptureAccess(), let backdropImage = desktopImage ?? backdrop.image(for: monitor) else {
-                return false
-            }
-            guard swept.allSatisfy({ capture.preview(for: $0.handle) != nil }) else {
-                request(swept, monitor: monitor, firstFrameOnly: true)
                 return false
             }
             show(backdropImage: backdropImage, monitor: monitor)
@@ -140,7 +162,8 @@ final class NiriScrollOverlay {
         handoff?.cancel()
         handoff = nil
         lastPresentedAt = CACurrentMediaTime()
-        place(swept, offset: offset, clip: Self.clipRect(for: items, in: visible, offset: offset))
+        let travel = items.map(\.remainingTravel).max() ?? 0
+        place(swept, keeping: items, atFinalFrames: false, clip: Self.clipRect(for: items, in: visible, offset: travel))
         return true
     }
 
@@ -149,7 +172,11 @@ final class NiriScrollOverlay {
         watchdog?.cancel()
         watchdog = nil
         let expected = items.filter { $0.frame.intersects(panelFrame) }
-        place(expected, offset: 0, clip: Self.clipRect(for: items, in: panelFrame, offset: 0))
+        guard expected.allSatisfy({ fittingPreview(for: $0) != nil }) else {
+            stop()
+            return
+        }
+        place(expected, keeping: items, atFinalFrames: true, clip: Self.clipRect(for: items, in: panelFrame, offset: 0))
         handoff?.cancel()
         handoff = Task { [weak self] in
             let deadline = CACurrentMediaTime() + Self.handoffTimeout
@@ -264,6 +291,9 @@ final class NiriScrollOverlay {
     private func show(backdropImage: CGImage, monitor: Monitor) {
         let frame = monitor.visibleFrame
         let panel = WorkspaceSwipePreviewPanel(frame: frame)
+        // Above managed windows but under the Dock, menu bar and workspace bar, which can sit
+        // inside this frame on a secondary display.
+        panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
         let root = CALayer()
         root.frame = CGRect(origin: .zero, size: frame.size)
         root.masksToBounds = true
@@ -324,18 +354,23 @@ final class NiriScrollOverlay {
         }
     }
 
-    private func place(_ items: [Item], offset: CGFloat, clip: CGRect) {
+    private func place(_ items: [Item], keeping known: [Item], atFinalFrames: Bool, clip: CGRect) {
         guard let root = panel?.contentView?.layer, let openContainer, let clippedContainer else { return }
         let scale = root.contentsScale
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         clipMask?.frame = clip.offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
+        let knownHandles = Set(known.map(\.handle))
+        for (handle, layer) in layers where !knownHandles.contains(handle) {
+            layer.removeFromSuperlayer()
+            layers.removeValue(forKey: handle)
+        }
         for item in items {
             let layer: CALayer
             if let existing = layers[item.handle] {
                 layer = existing
             } else {
-                guard let preview = capture.preview(for: item.handle) else { continue }
+                guard let preview = fittingPreview(for: item) else { continue }
                 layer = CALayer()
                 layer.contentsGravity = .resize
                 layer.contentsScale = scale
@@ -347,7 +382,7 @@ final class NiriScrollOverlay {
             if layer.superlayer !== container {
                 container.addSublayer(layer)
             }
-            layer.frame = Self.presentedFrame(item.frame, offset: offset)
+            layer.frame = (atFinalFrames ? item.frame : item.presented)
                 .offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
         }
         CATransaction.commit()

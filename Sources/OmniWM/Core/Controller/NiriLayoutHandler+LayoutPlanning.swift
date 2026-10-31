@@ -381,10 +381,18 @@ extension NiriLayoutHandler {
         return visibleOnly ? result.frames.filter { result.hiddenHandles[$0.key] == nil } : result.frames
     }
 
-    // Every tiled window where it sits once the viewport reaches its target, with columns
-    // outside the viewport left in strip position instead of parked at a screen edge, and
-    // whether the settled layout keeps it there.
-    func stripFrames(in workspaceId: WorkspaceDescriptor.ID) -> [WindowToken: (frame: CGRect, hiddenAtRest: Bool)]? {
+    struct StripPlacement {
+        let frame: CGRect
+        let presented: CGRect
+        let hiddenAtRest: Bool
+    }
+
+    // Every tiled window where it finishes once all motion ends and where it is at `time`, with
+    // columns outside the viewport left in strip position instead of parked at a screen edge.
+    func stripPlacements(
+        in workspaceId: WorkspaceDescriptor.ID,
+        at time: TimeInterval
+    ) -> [WindowToken: StripPlacement]? {
         guard let controller,
               let engine = controller.niriEngine,
               let monitor = controller.workspaceManager.monitor(for: workspaceId),
@@ -420,13 +428,26 @@ extension NiriLayoutHandler {
             sampledAnimationTime: Self.afterAnyMotion,
             isSettled: false
         )
-        var frames: [WindowToken: (frame: CGRect, hiddenAtRest: Bool)] = [:]
-        for (token, frame) in strip.frames where strip.hiddenHandles[token] == nil {
+        let stripFrames = strip.frames
+        let stripHidden = strip.hiddenHandles
+        let live = calculateOnDemandFrames(
+            snapshot: snapshot,
+            engine: engine,
+            monitor: monitor,
+            sampledAnimationTime: time,
+            isSettled: false
+        ).frames
+        var placements: [WindowToken: StripPlacement] = [:]
+        for (token, frame) in stripFrames where stripHidden[token] == nil {
             let rests = settledHidden[token] == nil
                 && settledFrames[token]?.approximatelyEqual(to: frame, tolerance: 1) == true
-            frames[token] = (frame, !rests)
+            placements[token] = StripPlacement(
+                frame: frame,
+                presented: live[token] ?? frame,
+                hiddenAtRest: !rests
+            )
         }
-        return frames
+        return placements
     }
 
     private func calculateOnDemandFrames(

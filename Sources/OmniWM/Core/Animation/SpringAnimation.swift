@@ -145,7 +145,11 @@ final class SpringAnimation {
         guard time.isFinite else { return }
         if awaitsFirstTick {
             awaitsFirstTick = false
-            startTime = max(startTime, time)
+            if time - startTime < Self.firstTickGracePeriod {
+                startTime = max(startTime, time)
+            } else {
+                startTime += Self.firstTickGracePeriod
+            }
         }
         latestTickTime = max(latestTickTime, time)
     }
