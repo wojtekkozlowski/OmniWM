@@ -375,7 +375,7 @@ final class WorkspaceSwipePreview {
 }
 
 @MainActor
-private final class WorkspaceSwipePreviewPanel: NSPanel {
+final class WorkspaceSwipePreviewPanel: NSPanel {
     init(frame: CGRect) {
         super.init(
             contentRect: frame,

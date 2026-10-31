@@ -48,6 +48,10 @@ struct AppAXEnhancedUIWriteScope {
         disableNs = AppAXFrameWriteTrace.elapsedNanoseconds(from: disableStartNs, to: disableEndNs)
     }
 
+    var openingTiming: AppAXEnhancedUITiming {
+        AppAXEnhancedUITiming(probeNs: probeNs, disableNs: disableNs, restoreNs: 0)
+    }
+
     func restore() -> AppAXEnhancedUITiming {
         let restoreStartNs = tracing && wasEnabled ? DispatchTime.now().uptimeNanoseconds : 0
         if wasEnabled {
@@ -60,5 +64,44 @@ struct AppAXEnhancedUIWriteScope {
             disableNs: disableNs,
             restoreNs: AppAXFrameWriteTrace.elapsedNanoseconds(from: restoreStartNs, to: restoreEndNs)
         )
+    }
+}
+
+// Keeps Enhanced UI off across consecutive drains so a motion toggles it once rather than
+// around every write. Only the app's AX thread touches this, and that thread's run loop
+// delivers the restore once drains stop arriving.
+final class AppAXEnhancedUIHold: @unchecked Sendable {
+    static let idleInterval: TimeInterval = 0.12
+
+    private var scope: AppAXEnhancedUIWriteScope?
+    private var restoreTimer: Timer?
+
+    func acquire(axApp: AXUIElement, pid: pid_t, tracing: Bool) -> (wasEnabled: Bool, timing: AppAXEnhancedUITiming) {
+        restoreTimer?.invalidate()
+        restoreTimer = nil
+        if let scope {
+            return (scope.wasEnabled, AppAXEnhancedUITiming(probeNs: 0, disableNs: 0, restoreNs: 0))
+        }
+        let opened = AppAXEnhancedUIWriteScope(axApp: axApp, pid: pid, tracing: tracing)
+        if opened.wasEnabled {
+            scope = opened
+        }
+        return (opened.wasEnabled, opened.openingTiming)
+    }
+
+    func scheduleRestore() {
+        guard scope != nil else { return }
+        restoreTimer?.invalidate()
+        restoreTimer = Timer.scheduledTimer(withTimeInterval: Self.idleInterval, repeats: false) { [weak self] _ in
+            self?.restoreNow()
+        }
+    }
+
+    func restoreNow() {
+        restoreTimer?.invalidate()
+        restoreTimer = nil
+        guard let scope else { return }
+        self.scope = nil
+        _ = scope.restore()
     }
 }

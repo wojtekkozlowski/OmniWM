@@ -38,6 +38,74 @@ final class AXFrameVerifiedStateTests: XCTestCase {
         XCTAssertEqual(events, ["accepted", "terminal"])
     }
 
+    func testPositionOnlyMotionFrameDropsPendingSizeAndVerificationForTheSameSize() throws {
+        let ledger = AXFrameApplicationLedger()
+        let window = AXWindowRef(element: AXUIElementCreateApplication(getpid()), windowId: 467_504)
+        let size = CGSize(width: 300, height: 200)
+        ledger.confirmFrameWrite(for: window.windowId, frame: CGRect(origin: .zero, size: size))
+        _ = ledger.prepareFrameApplication(
+            .init(pid: getpid(), window: window, frame: CGRect(origin: CGPoint(x: 10, y: 0), size: size)),
+            isRetry: false,
+            verify: true,
+            terminalObserver: nil
+        )
+
+        let request = try assumedRequest(
+            ledger,
+            window: window,
+            frame: CGRect(origin: CGPoint(x: 40, y: 0), size: size),
+            components: .position
+        )
+
+        XCTAssertEqual(request.components, .position)
+        XCTAssertFalse(request.verify)
+    }
+
+    func testPositionOnlyMotionFrameKeepsPendingWriteOfADifferentSize() throws {
+        let ledger = AXFrameApplicationLedger()
+        let window = AXWindowRef(element: AXUIElementCreateApplication(getpid()), windowId: 467_505)
+        let size = CGSize(width: 300, height: 200)
+        ledger.confirmFrameWrite(for: window.windowId, frame: CGRect(origin: .zero, size: size))
+        _ = ledger.prepareFrameApplication(
+            .init(pid: getpid(), window: window, frame: CGRect(x: 10, y: 0, width: 500, height: 200)),
+            isRetry: false,
+            verify: true,
+            terminalObserver: nil
+        )
+
+        let request = try assumedRequest(
+            ledger,
+            window: window,
+            frame: CGRect(origin: CGPoint(x: 40, y: 0), size: size),
+            components: .position
+        )
+
+        XCTAssertEqual(request.components, .all)
+        XCTAssertTrue(request.verify)
+    }
+
+    func testPositionOnlyMotionFrameKeepsPendingVerificationWithoutATrustedSize() throws {
+        let ledger = AXFrameApplicationLedger()
+        let window = AXWindowRef(element: AXUIElementCreateApplication(getpid()), windowId: 467_506)
+        let size = CGSize(width: 300, height: 200)
+        _ = ledger.prepareFrameApplication(
+            .init(pid: getpid(), window: window, frame: CGRect(origin: CGPoint(x: 10, y: 0), size: size)),
+            isRetry: false,
+            verify: true,
+            terminalObserver: nil
+        )
+
+        let request = try assumedRequest(
+            ledger,
+            window: window,
+            frame: CGRect(origin: CGPoint(x: 40, y: 0), size: size),
+            components: .position
+        )
+
+        XCTAssertEqual(request.components, .all)
+        XCTAssertTrue(request.verify)
+    }
+
     func testAssumedSizePreservesOriginAndRequiresSizeVerification() throws {
         let ledger = AXFrameApplicationLedger()
         let window = AXWindowRef(element: AXUIElementCreateApplication(getpid()), windowId: 467_502)

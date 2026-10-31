@@ -29,6 +29,18 @@ extension AXManager {
         return .position
     }
 
+    func motionFrameTarget(_ target: AXFrameApplicationTarget) -> AXFrameApplicationTarget {
+        guard target.components == .all,
+              animationFrameComponents(for: target.windowId, targetFrame: target.frame) == .position
+        else { return target }
+        return AXFrameApplicationTarget(
+            pid: target.pid,
+            window: target.expectedWindow,
+            frame: target.frame,
+            components: .position
+        )
+    }
+
     func animationFrameChange(_ change: LayoutFrameChange) -> LayoutFrameChange {
         let components = animationFrameComponents(for: change.token.windowId, targetFrame: change.frame)
         if components != .all {

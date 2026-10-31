@@ -86,10 +86,14 @@ struct SpringConfig: Equatable {
 }
 
 final class SpringAnimation {
+    private static let firstTickGracePeriod: TimeInterval = 0.5
+
     private(set) var from: Double
     private(set) var target: Double
     private let initialVelocity: Double
-    private let startTime: TimeInterval
+    private var startTime: TimeInterval
+    private var awaitsFirstTick: Bool
+    private var latestTickTime: TimeInterval = -.infinity
     let config: SpringConfig
     private let displayRefreshRate: Double
 
@@ -102,8 +106,10 @@ final class SpringAnimation {
         initialVelocity: Double = 0,
         startTime: TimeInterval,
         config: SpringConfig = .default,
-        displayRefreshRate: Double = 60.0
+        displayRefreshRate: Double = 60.0,
+        awaitsFirstTick: Bool = false
     ) {
+        self.awaitsFirstTick = awaitsFirstTick
         let finiteFrom = from.isFinite ? from : (to.isFinite ? to : 0)
         let finiteTarget = to.isFinite ? to : finiteFrom
         let inputsAreFinite = from.isFinite
@@ -133,9 +139,34 @@ final class SpringAnimation {
             : 0
     }
 
+    // Main-thread work between committing a motion and its first display tick must not count
+    // as elapsed time, or that tick lands far along the curve and the window visibly jumps.
+    func noteDisplayTick(_ time: TimeInterval) {
+        guard time.isFinite else { return }
+        if awaitsFirstTick {
+            awaitsFirstTick = false
+            startTime = max(startTime, time)
+        }
+        latestTickTime = max(latestTickTime, time)
+    }
+
+    func holdStart(until time: TimeInterval) {
+        guard time.isFinite else { return }
+        startTime = max(startTime, time)
+    }
+
+    // Without a tick the display link isn't running, so the clock resumes rather than leaving
+    // the motion frozen at its start.
+    private func elapsedTime(at time: TimeInterval) -> TimeInterval {
+        // Ticks sample their future presentation time, so a frame sampled at the current time
+        // between ticks must not land behind the frame already on its way to the screen.
+        let elapsed = max(0, max(time, latestTickTime) - startTime)
+        return awaitsFirstTick ? max(0, elapsed - Self.firstTickGracePeriod) : elapsed
+    }
+
     func value(at time: TimeInterval) -> Double {
         guard time.isFinite else { return target }
-        let elapsed = max(0, time - startTime)
+        let elapsed = elapsedTime(at: time)
         if elapsed >= duration {
             return target
         }
@@ -161,12 +192,12 @@ final class SpringAnimation {
 
     func isComplete(at time: TimeInterval) -> Bool {
         guard time.isFinite else { return true }
-        return max(0, time - startTime) >= duration
+        return elapsedTime(at: time) >= duration
     }
 
     func velocity(at time: TimeInterval) -> Double {
         guard time.isFinite else { return 0 }
-        let elapsed = max(0, time - startTime)
+        let elapsed = elapsedTime(at: time)
         if elapsed >= duration {
             return 0
         }

@@ -9,17 +9,20 @@ struct AppAXFrameBatchWriter {
     private let suppression: LockedWindowIdSet?
     private let hardSuppression: LockedWindowIdSet?
     private let trace: AppAXFrameWriteTrace
+    private let enhancedUIHold: AppAXEnhancedUIHold?
 
     init(
         generations: LockedWindowGenerationMap,
         suppression: LockedWindowIdSet?,
         hardSuppression: LockedWindowIdSet?,
-        trace: AppAXFrameWriteTrace
+        trace: AppAXFrameWriteTrace,
+        enhancedUIHold: AppAXEnhancedUIHold? = nil
     ) {
         self.generations = generations
         self.suppression = suppression
         self.hardSuppression = hardSuppression
         self.trace = trace
+        self.enhancedUIHold = enhancedUIHold
     }
 
     func execute(
@@ -37,16 +40,21 @@ struct AppAXFrameBatchWriter {
             )
         }
         let batchStartNs = latencyActive ? DispatchTime.now().uptimeNanoseconds : 0
-        let enhancedUI = AppAXEnhancedUIWriteScope(axApp: axApp, pid: trace.context.pid, tracing: latencyActive)
+        let held = enhancedUIHold?.acquire(axApp: axApp, pid: trace.context.pid, tracing: latencyActive)
+        let enhancedUI = held == nil
+            ? AppAXEnhancedUIWriteScope(axApp: axApp, pid: trace.context.pid, tracing: latencyActive)
+            : nil
         var activeTrace = latencyActive ? trace : nil
-        activeTrace?.enhancedUI = enhancedUI.wasEnabled
+        activeTrace?.enhancedUI = held?.wasEnabled ?? enhancedUI?.wasEnabled ?? false
         let results = applyRequests(
             items,
             trace: activeTrace,
             isCancelled: isCancelled
         )
-        let timing = enhancedUI.restore()
-        activeTrace?.recordBatch(count: items.count, startedNs: batchStartNs, timing: timing)
+        enhancedUIHold?.scheduleRestore()
+        if let timing = held?.timing ?? enhancedUI?.restore() {
+            activeTrace?.recordBatch(count: items.count, startedNs: batchStartNs, timing: timing)
+        }
         return results
     }
 

@@ -48,6 +48,8 @@ enum StructuralMutationOutcome: Equatable {
 
 @MainActor final class NiriLayoutHandler {
     weak var controller: WMController?
+    var scrollOverlays: [Monitor.ID: NiriScrollOverlay] = [:]
+    static let afterAnyMotion: TimeInterval = 1e12
 
     struct NiriLayoutPass {
         let motion: MotionSnapshot

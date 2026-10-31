@@ -35,15 +35,36 @@ struct AXFramePreparation {
         traceRequestId = options.traceOrigin.effectId != 0 || options.parentTraceRequestId != 0
             ? FrameEffectTraceContext.makeRequestTraceId(parentTraceId: options.parentTraceRequestId)
             : 0
+        let carriedWrite = pendingWrite.flatMap { pending in
+            sameAXWindowIdentity(pending.expectedWindow, target.expectedWindow)
+                && !Self.motionFrameReplaces(
+                    pending, target: target, verify: options.verify, trustedSize: cachedState?.verifiedSize
+                )
+                ? pending : nil
+        }
         var components = target.components
-        if let pendingWrite, sameAXWindowIdentity(pendingWrite.expectedWindow, target.expectedWindow) {
-            components.formUnion(pendingWrite.components)
+        if let carriedWrite {
+            components.formUnion(carriedWrite.components)
         }
         self.components = components
-        verify = options.verify
-            ||
-            (pendingWrite
-                .map { sameAXWindowIdentity($0.expectedWindow, target.expectedWindow) && $0.verify } == true)
+        verify = options.verify || carriedWrite?.verify == true
+    }
+
+    // A motion frame keeps a verified size, so a pending write for that same size has
+    // nothing left to carry, and the settling frame verifies. An app slower than the display
+    // always has a write pending, so carrying it would keep every frame a size write plus a
+    // readback until the motion ends.
+    private static func motionFrameReplaces(
+        _ pending: AXPendingFrameWrite,
+        target: AXFrameApplicationTarget,
+        verify: Bool,
+        trustedSize: CGSize?
+    ) -> Bool {
+        guard !verify, target.components == .position, let trustedSize else { return false }
+        return [pending.frame.size, target.frame.size].allSatisfy {
+            abs($0.width - trustedSize.width) < FrameTolerance.frameWrite
+                && abs($0.height - trustedSize.height) < FrameTolerance.frameWrite
+        }
     }
 
     var matchesPendingWrite: Bool {

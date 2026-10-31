@@ -35,6 +35,12 @@ final class AnimationDriver {
         renderOffsets(in: workspaceId, semanticOffset: semanticOffset, at: time).liveOffset
     }
 
+    func holdMotionStart(in workspaceId: WorkspaceDescriptor.ID, until time: TimeInterval) {
+        if case let .spring(animation) = motions[workspaceId] {
+            animation.holdStart(until: time)
+        }
+    }
+
     func renderOffsets(
         in workspaceId: WorkspaceDescriptor.ID,
         semanticOffset: CGFloat,
@@ -206,7 +212,8 @@ final class AnimationDriver {
                     initialVelocity: origin.velocity,
                     startTime: time,
                     config: config,
-                    displayRefreshRate: next.displayRefreshRate
+                    displayRefreshRate: next.displayRefreshRate,
+                    awaitsFirstTick: true
                 )
             )
 
@@ -276,6 +283,7 @@ final class AnimationDriver {
             }
             return .running
         case let .spring(animation):
+            animation.noteDisplayTick(time)
             if animation.isComplete(at: time) {
                 motions.removeValue(forKey: workspaceId)
                 return .inactive

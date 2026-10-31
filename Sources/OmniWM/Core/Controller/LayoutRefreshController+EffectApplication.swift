@@ -123,6 +123,7 @@ extension LayoutRefreshController {
             controller.axEventHandler.subscribeToManagedWindows()
         }
         workspaceSwipe.warmPreviews()
+        niriHandler.warmScrollOverlay()
     }
 }
 
