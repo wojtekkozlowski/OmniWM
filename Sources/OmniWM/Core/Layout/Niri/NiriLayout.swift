@@ -103,7 +103,7 @@ extension NiriLayoutEngine {
         isSettled: Bool = false,
         excludedTokens: Set<WindowToken>? = nil
     ) {
-        if let excludedTokens { setProjectionExclusions(excludedTokens, in: workspaceId) }
+        if let excludedTokens, !previewsLayout { setProjectionExclusions(excludedTokens, in: workspaceId) }
         let excludedTokens = projectionExclusions(in: workspaceId)
         let projectedColumns = projectedColumns(in: workspaceId)
         guard !projectedColumns.isEmpty else { return }
@@ -112,8 +112,10 @@ extension NiriLayoutEngine {
             hiddenPlacementMonitor: hiddenPlacementMonitor,
             hiddenPlacementMonitors: hiddenPlacementMonitors
         )
-        clearExcludedColumnFrames(in: workspaceId, excluding: excludedTokens)
-        if animationTime == nil {
+        if !previewsLayout {
+            clearExcludedColumnFrames(in: workspaceId, excluding: excludedTokens)
+        }
+        if animationTime == nil, !previewsLayout {
             reconcilePrimarySpanFit(
                 in: workspaceId,
                 workingFrame: context.area.workingFrame,
@@ -211,8 +213,10 @@ extension NiriLayoutEngine {
     ) {
         let layoutFrames = context.frames
         let secondaryGap = context.secondaryGap
-        container.frame = placement.canonicalRect
-        container.renderedFrame = placement.renderedRect
+        if !previewsLayout {
+            container.frame = placement.canonicalRect
+            container.renderedFrame = placement.renderedRect
+        }
 
         guard !windows.isEmpty else { return }
 
@@ -253,6 +257,7 @@ extension NiriLayoutEngine {
             )
             let renderedFrame = window.applyLayout(
                 layout,
+                storesLayout: !previewsLayout,
                 sizingMode: sizingMode,
                 within: containerFrames,
                 at: context.time

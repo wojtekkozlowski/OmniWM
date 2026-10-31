@@ -6,6 +6,7 @@ import Foundation
 extension NiriWindow {
     func applyLayout(
         _ layout: NiriWindowLayout,
+        storesLayout: Bool = true,
         sizingMode: SizingMode,
         within geometry: NiriContainerLayoutFrames,
         at time: TimeInterval
@@ -13,33 +14,35 @@ extension NiriWindow {
         switch sizingMode {
         case .fullscreen,
              .maximized:
-            applyUnanimatedLayout(layout, within: geometry)
+            applyUnanimatedLayout(layout, within: geometry, storesLayout: storesLayout)
         case .normal:
-            applyAnimatedLayout(layout, within: geometry, at: time)
+            applyAnimatedLayout(layout, within: geometry, at: time, storesLayout: storesLayout)
         }
     }
 
     private func applyUnanimatedLayout(
         _ layout: NiriWindowLayout,
-        within geometry: NiriContainerLayoutFrames
+        within geometry: NiriContainerLayoutFrames,
+        storesLayout: Bool
     ) -> CGRect {
-        applyResolvedLayout(layout, orientation: geometry.orientation)
-        return applyRenderedFrame(layout.renderedBaseFrame, within: geometry)
+        if storesLayout { applyResolvedLayout(layout, orientation: geometry.orientation) }
+        return applyRenderedFrame(layout.renderedBaseFrame, within: geometry, storesLayout: storesLayout)
     }
 
     private func applyAnimatedLayout(
         _ layout: NiriWindowLayout,
         within geometry: NiriContainerLayoutFrames,
-        at time: TimeInterval
+        at time: TimeInterval,
+        storesLayout: Bool
     ) -> CGRect {
-        applyResolvedLayout(layout, orientation: geometry.orientation)
+        if storesLayout { applyResolvedLayout(layout, orientation: geometry.orientation) }
         let frame = animatedFrame(
             from: layout.renderedBaseFrame,
             within: geometry.renderedRect,
             at: time,
             orientation: geometry.orientation
         )
-        return applyRenderedFrame(frame, within: geometry)
+        return applyRenderedFrame(frame, within: geometry, storesLayout: storesLayout)
     }
 
     private func applyResolvedLayout(_ layout: NiriWindowLayout, orientation: Monitor.Orientation) {
@@ -54,7 +57,8 @@ extension NiriWindow {
 
     private func applyRenderedFrame(
         _ frame: CGRect,
-        within geometry: NiriContainerLayoutFrames
+        within geometry: NiriContainerLayoutFrames,
+        storesLayout: Bool
     ) -> CGRect {
         let clampedFrame = NiriMonitorPlaneGeometry.clampedFrame(
             frame,
@@ -62,7 +66,7 @@ extension NiriWindow {
             orientation: geometry.orientation
         )
         let roundedFrame = clampedFrame.roundedToPhysicalPixels(scale: geometry.scale)
-        renderedFrame = roundedFrame
+        if storesLayout { renderedFrame = roundedFrame }
         return roundedFrame
     }
 

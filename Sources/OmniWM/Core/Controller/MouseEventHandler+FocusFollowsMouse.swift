@@ -72,7 +72,10 @@ extension MouseEventHandler {
         guard let workspaceId = workspaceIdForPointer(at: location) else {
             return true
         }
+        // While the overlay draws a motion, the real windows sit where the motion began until
+        // the handoff, so the window the WindowServer reports under the pointer is stale.
         return !controller.niriLayoutHandler.hasScrollAnimation(for: workspaceId)
+            && !controller.niriLayoutHandler.scrollOverlayPresents(for: workspaceId)
     }
 
     func workspaceIdForPointer(at location: CGPoint) -> WorkspaceDescriptor.ID? {

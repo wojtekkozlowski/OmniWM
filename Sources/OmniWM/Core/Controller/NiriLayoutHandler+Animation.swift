@@ -76,7 +76,11 @@ extension NiriLayoutHandler {
         }
 
         if animationsOngoing {
-            if presentScrollOverlay(wsId: wsId, engine: engine, monitor: monitor, at: targetTime) {
+            // A size change needs the apps to draw, so the overlay stays out of those motions
+            // entirely rather than computing placements it cannot use.
+            if !engine.hasAnySizeAnimationRunning(in: wsId),
+               presentScrollOverlay(wsId: wsId, engine: engine, monitor: monitor, at: targetTime)
+            {
                 return
             }
             scrollOverlays[monitor.id]?.stop()
@@ -162,6 +166,11 @@ extension NiriLayoutHandler {
         }
     }
 
+    func scrollOverlayPresents(for workspaceId: WorkspaceDescriptor.ID) -> Bool {
+        guard let monitor = controller?.workspaceManager.monitor(for: workspaceId) else { return false }
+        return scrollOverlays[monitor.id]?.isVisible == true
+    }
+
     func scrollOverlayWindowRemoved(_ token: WindowToken) {
         for overlay in scrollOverlays.values {
             overlay.remove(token: token)
@@ -174,7 +183,8 @@ extension NiriLayoutHandler {
               !controller.isOverviewOpen(),
               let monitor = controller.monitorForInteraction(),
               let workspace = controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id),
-              controller.workspaceManager.activeLayoutKind(for: workspace.id) == .niri
+              controller.workspaceManager.activeLayoutKind(for: workspace.id) == .niri,
+              !hasScrollAnimation(for: workspace.id)
         else { return }
         let overlay = scrollOverlay(for: monitor, controller: controller)
         overlay.warm(scrollOverlayItems(in: workspace.id, at: Self.afterAnyMotion), monitor: monitor)

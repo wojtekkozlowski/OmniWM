@@ -6,6 +6,9 @@ import Foundation
 
 final class NiriLayoutEngine {
     var revealsAllColumns = false
+    // A preview layout leaves the engine's stored frames, exclusions and span fits as they
+    // were, so it can be computed between real layouts without the next one seeing it.
+    var previewsLayout = false
 
     enum NewContainerSizingPolicy {
         case workspaceDefault

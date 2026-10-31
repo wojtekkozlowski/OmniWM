@@ -237,12 +237,12 @@ final class NiriScrollOverlay {
         openContainer = nil
         clippedContainer = nil
         clipMask = nil
-        capture.clear()
         CATransaction.commit()
     }
 
     func release() {
         stop()
+        capture.clear()
         desktopCapture?.cancel()
         desktopCapture = nil
         desktopImage = nil

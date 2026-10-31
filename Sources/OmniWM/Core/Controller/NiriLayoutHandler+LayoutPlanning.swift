@@ -410,6 +410,8 @@ extension NiriLayoutHandler {
         else {
             return nil
         }
+        engine.previewsLayout = true
+        defer { engine.previewsLayout = false }
         let settled = calculateOnDemandFrames(
             snapshot: snapshot,
             engine: engine,

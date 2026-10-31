@@ -195,6 +195,11 @@ extension NiriLayoutEngine {
         return anyRunning
     }
 
+    func hasAnySizeAnimationRunning(in workspaceId: WorkspaceDescriptor.ID) -> Bool {
+        guard let root = root(for: workspaceId) else { return false }
+        return root.columns.contains { $0.hasWidthAnimationRunning }
+    }
+
     func hasAnyColumnAnimationsRunning(in workspaceId: WorkspaceDescriptor.ID) -> Bool {
         guard let root = root(for: workspaceId) else { return false }
         return root.columns.contains { $0.hasMoveAnimationRunning || $0.hasWidthAnimationRunning }

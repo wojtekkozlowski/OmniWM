@@ -54,6 +54,31 @@ final class FullyVisibleHoverFocusTests: XCTestCase {
         }
     }
 
+    func testHoverDoesNotFocusWhileTheScrollOverlayPresents() throws {
+        try withFixture { fixture in
+            let image = try XCTUnwrap(CGContext(
+                data: nil, width: 1_000, height: 800, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )?.makeImage())
+            let overlay = NiriScrollOverlay(
+                ownedWindowRegistry: fixture.controller.ownedWindowRegistry,
+                backdrop: WorkspaceSwipeBackdrop(wallpaperCache: OverviewWallpaperCache(captureWallpaper: { _ in image })),
+                hasCaptureAccess: { true }
+            )
+            defer { overlay.stop() }
+            XCTAssertTrue(overlay.present([], monitor: fixture.monitor))
+            fixture.controller.niriLayoutHandler.scrollOverlays[fixture.monitor.id] = overlay
+            let frame = CGRect(x: 400, y: 100, width: 300, height: 200)
+
+            fixture.hover(frame: frame, exactId: true)
+            XCTAssertTrue(fixture.recorder.tokens.isEmpty)
+
+            overlay.stop()
+            fixture.hover(frame: frame, exactId: true)
+            XCTAssertEqual(fixture.recorder.tokens, [fixture.target.token])
+        }
+    }
+
     func testFullyVisibleWindowsIncludingExactScreenBoundsStillFocus() throws {
         for exactId in [false, true] {
             for frame in [
