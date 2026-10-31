@@ -73,6 +73,8 @@ INTERPOLATION_SPECIFIERS = {
     "Int": "%lld", "Int64": "%lld", "ClosedRange<Int>.Element": "%lld", "Int32": "%d", "pid_t": "%d",
 }
 FORMAT_SPECIFIABLE = "generic_signature=<T where T : _FormatSpecifiable> T -> "
+# The compiler leaves this path unquoted, so a path may contain spaces.
+AST_LOCATION = re.compile(r"\blocation=.*?:(\d+):(\d+)(?=[ )])")
 AST_TOKEN = re.compile(r'(?:(\w+)=)?("(?:[^"\\]|\\.)*"|\[[^\]]*\]|[^\s()"]+)')
 AST_ESCAPE = re.compile(r"\\(u\{([0-9A-Fa-f]+)\}|.)", re.DOTALL)
 AST_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "'": "'", "\\": "\\"}
@@ -527,8 +529,10 @@ def is_localized(node):
 
 
 def source_location(node):
-    _, line, column = node.attribute("location").rsplit(":", 2)
-    return int(line), int(column)
+    match = AST_LOCATION.search(node.text)
+    if match is None:
+        raise ValueError(f"compiler AST node has no source location: {node.text[:120]!r}")
+    return int(match.group(1)), int(match.group(2))
 
 
 def call_parts(call):
