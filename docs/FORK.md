@@ -34,9 +34,7 @@ defaults write com.barut.OmniWM.dev OmniWMExperimentScrollOverlay -bool true
 
 ## Keeping up with upstream
 
-`.github/workflows/sync-upstream.yml` merges `OmniNull/OmniWM` main into `smooth-scroll` daily, builds the result, and pushes only if it builds. It also moves this fork's `main` to match upstream. A conflict or a broken build fails the run, and nothing is pushed.
-
-It needs a repository secret named `SYNC_TOKEN`: a fine-grained token for this repository only, with read and write access to Contents and Workflows. Syncing does not publish a release, so installed apps change only when a release is published.
+`.github/workflows/sync-upstream.yml` merges `OmniNull/OmniWM` main into `smooth-scroll` and builds the result, but it is not scheduled and cannot run yet: the build needs the macOS 27 SDK, and neither `macos-26` nor `macos-27` hosted runners could provide it when tested.
 
 ## Known limitations of the overlay
 
