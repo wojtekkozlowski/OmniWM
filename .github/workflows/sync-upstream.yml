@@ -1,82 +1,73 @@
 name: Sync from upstream
 
+# Merges OmniNull/OmniWM main into this fork. It only merges: OmniWM needs the
+# macOS 27 SDK, which GitHub's hosted macOS images do not have (upstream builds
+# on its own self-hosted `xcode-27` runner), so the build, tests and releases
+# happen locally, as docs/FORK.md describes. The merged branch is therefore
+# unverified until the next local build; nothing installs from the branch.
+
 on:
+  schedule:
+    - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Merge and build, but push nothing, even when already up to date
+        description: Merge, but push nothing
         type: boolean
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   sync:
-    name: Merge, build and push
+    name: Merge and push
     if: github.repository == 'wojtekkozlowski/OmniWM'
-    runs-on: macos-27
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: smooth-scroll
           fetch-depth: 0
-          # The default token cannot push changes to workflow files, which upstream makes.
+          # The default token cannot push changes to workflow files, which upstream
+          # makes now and then; set SYNC_TOKEN (a PAT with the `workflow` scope) when
+          # a run fails on that. Pushes made with a PAT also trigger the CI and
+          # Website workflows inherited from upstream, so disable those in the
+          # fork's Actions tab first: their `xcode-27` runner does not exist here.
           token: ${{ secrets.SYNC_TOKEN || github.token }}
 
       - name: Merge upstream main
         id: merge
-        env:
-          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           git remote add upstream https://github.com/OmniNull/OmniWM.git
           git fetch --no-tags upstream main
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          before="$(git rev-parse HEAD)"
           if git merge-base --is-ancestor upstream/main HEAD; then
-            echo "Already contains upstream main."
+            echo "smooth-scroll already contains upstream main." | tee -a "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             if ! git merge --no-edit upstream/main; then
               echo "::error::Merging upstream main conflicts. Resolve these by hand:"
               git diff --name-only --diff-filter=U
+              {
+                echo "## Merge conflict"
+                echo
+                echo "Resolve locally: \`git fetch origin && git merge origin/main\` on smooth-scroll."
+                echo
+                git diff --name-only --diff-filter=U | sed 's/^/- /'
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Merged upstream main into smooth-scroll"
+              echo
+              git log --oneline "$before..upstream/main" | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          if [ "$DRY_RUN" = "true" ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/smooth-scroll)" ]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Select Xcode
-        if: steps.merge.outputs.build == 'true'
-        run: |
-          xcode="$(ls -d /Applications/Xcode_[0-9]*.app | sort -V | tail -1)"
-          echo "Using $xcode"
-          echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
-
-      - uses: ./.github/actions/setup-swift
-        if: steps.merge.outputs.build == 'true'
-
-      - name: Download GhosttyKit
-        if: steps.merge.outputs.build == 'true'
-        run: |
-          url="$(grep '^OMNIWM_GHOSTTY_DOWNLOAD_URL=' Scripts/dev-tools.env | cut -d= -f2-)"
-          sha="$(grep '^OMNIWM_GHOSTTY_ZIP_SHA256=' Scripts/dev-tools.env | cut -d= -f2-)"
-          curl -fsSL "$url" -o ghostty.zip
-          echo "$sha  ghostty.zip" | shasum -a 256 -c -
-          mkdir -p Frameworks
-          unzip -q ghostty.zip -d Frameworks
-          rm ghostty.zip
-          ./Scripts/ghostty-preflight.sh verify
-
-      - name: Build
-        if: steps.merge.outputs.build == 'true'
-        run: |
-          LIBRARY_PATH="$(./Scripts/ghostty-preflight.sh print-library-dir)" swift build --arch arm64
 
       - name: Push
         if: inputs.dry_run != true

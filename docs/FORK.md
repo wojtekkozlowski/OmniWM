@@ -34,7 +34,22 @@ defaults write com.barut.OmniWM.dev OmniWMExperimentScrollOverlay -bool true
 
 ## Keeping up with upstream
 
-`.github/workflows/sync-upstream.yml` merges `OmniNull/OmniWM` main into `smooth-scroll` and builds the result, but it is not scheduled and cannot run yet: the build needs the macOS 27 SDK, and neither `macos-26` nor `macos-27` hosted runners could provide it when tested.
+`.github/workflows/sync-upstream.yml` runs every Monday (and on demand from the Actions tab, with a dry-run option). It fast-forwards the fork's `main` to `OmniNull/OmniWM` main and merges that into `smooth-scroll`. It only merges: OmniWM needs the macOS 27 SDK, which GitHub's hosted macOS images lack (upstream builds on its own self-hosted `xcode-27` runner), so the merged branch is not compiled until the next local build. Nothing installs from the branch; the install script takes the assets of the latest release, which are built and tested locally.
+
+It fails, with an email from GitHub, when:
+
+- the merge conflicts — the run summary lists the files; merge `origin/main` into `smooth-scroll` locally, resolve, push;
+- upstream changed a file under `.github/workflows` — the default token may not push those. Add a repository secret `SYNC_TOKEN` holding a fine-grained PAT with contents and workflows write access, and first disable the CI and Website workflows inherited from upstream in the fork's Actions tab, since pushes made with a PAT trigger them and their `xcode-27` runner does not exist here.
+
+GitHub pauses scheduled workflows after 60 days without a push to the fork; the Actions tab shows a banner to re-enable it.
+
+## Releasing
+
+Releases are built on a Mac with Xcode 27 and the toolchain `Scripts/dev-tools.env` names. Build with the dev app name and bundle id, zip the app together with its checksum, and publish them as `OmniWM-Dev-arm64.zip` and `OmniWM-Dev-arm64.zip.sha256` on a release tagged `smooth-scroll-vN`; the install script always takes the latest release.
+
+```bash
+OMNIWM_APP_NAME="OmniWM Dev" OMNIWM_BUNDLE_ID=com.barut.OmniWM.dev OMNIWM_SIGNING_IDENTITY=omniwm ./Scripts/package-app.sh release dev
+```
 
 ## Known limitations of the overlay
 
