@@ -58,6 +58,11 @@ if command -v plutil >/dev/null 2>&1; then
     plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP_DIR/Contents/Info.plist"
     plutil -replace CFBundleName -string "$APP_NAME" "$APP_DIR/Contents/Info.plist"
     plutil -replace CFBundleDisplayName -string "$APP_NAME" "$APP_DIR/Contents/Info.plist"
+    DEV_BUILD="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo SNAPSHOT)"
+    if [ -n "$(git -C "$ROOT_DIR" status --porcelain 2>/dev/null)" ]; then
+      DEV_BUILD="$DEV_BUILD-dirty"
+    fi
+    plutil -replace OMNIWMDevBuild -string "$DEV_BUILD" "$APP_DIR/Contents/Info.plist"
   fi
 fi
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"

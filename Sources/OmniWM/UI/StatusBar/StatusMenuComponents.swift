@@ -9,6 +9,15 @@ struct MenuHeader: View {
         Bundle.main.appDisplayVersion ?? "0.3.1"
     }
 
+    private var title: Text {
+        Bundle.main.devBuildLabel == nil ? Text("OmniWM") : Text(verbatim: "OmniWM Dev")
+    }
+
+    private var versionLine: Text {
+        guard let label = Bundle.main.devBuildLabel else { return Text("v\(appVersion)") }
+        return Text(verbatim: "v\(appVersion) · \(label)")
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Image(nsImage: OmniWMBrandMark.statusItemImage(pointSize: 28))
@@ -17,14 +26,14 @@ struct MenuHeader: View {
                 .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("OmniWM")
+                    title
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color(nsColor: .labelColor))
                     Circle()
                         .fill(Color(nsColor: .systemGreen))
                         .frame(width: 6, height: 6)
                 }
-                Text("v\(appVersion)")
+                versionLine
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
