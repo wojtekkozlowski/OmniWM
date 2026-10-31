@@ -8,6 +8,10 @@ extension Bundle {
         infoDictionary?["CFBundleShortVersionString"] as? String
     }
 
+    var devBuildLabel: String? {
+        infoDictionary?["OMNIWMDevBuild"] as? String
+    }
+
     var appDisplayVersion: String? {
         guard let version = appVersion else { return nil }
         guard let tag = canaryReleaseTag else { return version }
