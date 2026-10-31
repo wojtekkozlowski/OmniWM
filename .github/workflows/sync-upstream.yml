@@ -56,12 +56,8 @@ jobs:
       - name: Select Xcode
         if: steps.merge.outputs.build == 'true'
         run: |
-          xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
-          if [ -z "$xcode" ]; then
-            echo "::error::This runner has no Xcode 27, which the build needs."
-            ls -d /Applications/Xcode*.app
-            exit 1
-          fi
+          xcode="$(ls -d /Applications/Xcode_[0-9]*.app | sort -V | tail -1)"
+          echo "Using $xcode"
           echo "DEVELOPER_DIR=$xcode/Contents/Developer" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/setup-swift
