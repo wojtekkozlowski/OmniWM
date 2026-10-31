@@ -57,9 +57,13 @@ extension NiriLayoutEngine {
         let viewPosition = activePosition + sampling.viewOffset
         let viewPositions = sampling.settledVisibilityOffset
             .map { [activePosition + $0, viewPosition] } ?? [viewPosition]
-        let revealMargin: CGFloat = switch context.orientation {
-        case .horizontal: context.area.workingFrame.width * 0.25
-        case .vertical: context.area.workingFrame.height * 0.25
+        let revealMargin: CGFloat = if revealsAllColumns {
+            1e7
+        } else {
+            switch context.orientation {
+            case .horizontal: context.area.workingFrame.width * 0.25
+            case .vertical: context.area.workingFrame.height * 0.25
+            }
         }
         return NiriColumnLayoutPass(
             context: context,

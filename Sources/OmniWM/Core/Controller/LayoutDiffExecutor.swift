@@ -94,6 +94,7 @@ final class LayoutDiffExecutor {
             preparation.frameUpdates,
             isAnimationTick: plan.isAnimationTick,
             isInteractiveResize: plan.isInteractiveResize,
+            startsMotion: Self.startsMotion(plan, controller: controller),
             controller: controller
         )
         refreshController.applyWorkspaceMonitorRelocationFrameUpdates(
@@ -108,6 +109,7 @@ final class LayoutDiffExecutor {
         _ frameUpdates: [AXFrameApplicationTarget],
         isAnimationTick: Bool,
         isInteractiveResize: Bool = false,
+        startsMotion: Bool = false,
         controller: WMController
     ) {
         guard !frameUpdates.isEmpty else { return }
@@ -117,6 +119,10 @@ final class LayoutDiffExecutor {
                 axManager.forceApplyNextFrame(for: update.windowId)
             }
         }
+        if startsMotion {
+            axManager.applyFramesParallel(frameUpdates.map(axManager.motionFrameTarget), verify: false)
+            return
+        }
         guard isInteractiveResize else {
             axManager.applyFramesParallel(frameUpdates, verify: !isAnimationTick)
             return
@@ -124,6 +130,15 @@ final class LayoutDiffExecutor {
         let moves = frameUpdates.filter { $0.components == .position }
         axManager.applyFramesParallel(moves, verify: false)
         axManager.applyFramesParallel(frameUpdates.filter { $0.components != .position })
+    }
+
+    // Ticks follow these frames and the settling frame verifies, so a readback here would
+    // only hold the app's first animated writes back.
+    static func startsMotion(_ plan: WorkspaceLayoutPlan, controller: WMController) -> Bool {
+        guard !plan.isAnimationTick, controller.motionPolicy.animationsEnabled else { return false }
+        return plan.continuesMotion || plan.animationDirectives.contains {
+            if case .startNiriScroll = $0 { true } else { false }
+        }
     }
 
     private func resolveMonitor(

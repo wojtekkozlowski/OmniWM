@@ -18,6 +18,7 @@ final class AppAXFrameDelivery {
     private let parkFrameWriteGenerations = LockedWindowGenerationMap()
     private let closingFrameWriteGenerations = LockedClosingFrameGenerationMap()
     private let frameWriteSuppression = LockedWindowIdSet()
+    let enhancedUIHold = AppAXEnhancedUIHold()
 
     nonisolated init() {}
 
@@ -148,7 +149,8 @@ final class AppAXFrameDelivery {
             generations: trace.lane == .park ? parkFrameWriteGenerations : frameWriteGenerations,
             suppression: trace.lane == .park ? nil : frameWriteSuppression,
             hardSuppression: trace.lane == .park ? frameWriteSuppression : nil,
-            trace: trace
+            trace: trace,
+            enhancedUIHold: enhancedUIHold
         )
     }
 

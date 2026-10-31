@@ -231,6 +231,7 @@ final class AppAXContext {
     func prepareForStopRestoration() {
         cancelRetryRaise()
         frameDelivery.shutdown()
+        restoreHeldEnhancedUI()
     }
 
     func destroy() {
@@ -257,6 +258,7 @@ final class AppAXContext {
         LockedEnhancedUIStateMap.shared.invalidate(pid)
 
         frameDelivery.shutdown()
+        restoreHeldEnhancedUI()
 
         nonisolated(unsafe) let appThread = thread
         let shutdown = AppAXContextShutdown(
@@ -270,6 +272,12 @@ final class AppAXContext {
 }
 
 extension AppAXContext {
+    private func restoreHeldEnhancedUI() {
+        nonisolated(unsafe) let appThread = thread
+        let hold = frameDelivery.enhancedUIHold
+        appThread?.runInLoopAsync { _ in hold.restoreNow() }
+    }
+
     func setWindowTitleNotifications(_ enabled: Bool) {
         nonisolated(unsafe) let appThread = thread
         appThread?.runInLoopAsync { [axApp, focusedWindowObserver] _ in

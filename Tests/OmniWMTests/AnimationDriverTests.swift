@@ -30,6 +30,132 @@ final class AnimationDriverTests: XCTestCase {
         return next
     }
 
+    func testScrollOverlaySweepsWindowsThatEnterDuringTheScroll() {
+        let visible = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let entering = CGRect(x: 1200, y: 0, width: 500, height: 800)
+        XCTAssertTrue(NiriScrollOverlay.isSwept(entering, offset: -300, in: visible))
+        XCTAssertFalse(NiriScrollOverlay.isSwept(entering, offset: 100, in: visible))
+        XCTAssertEqual(
+            NiriScrollOverlay.presentedFrame(entering, offset: -300),
+            CGRect(x: 900, y: 0, width: 500, height: 800)
+        )
+    }
+
+    func testSpringHoldsItsStartUntilTheFirstDisplayTick() throws {
+        let driver = AnimationDriver()
+        var next = state(viewOffset: 0)
+        next.springOffset(to: 900)
+        driver.reconcileViewportCommit(
+            workspaceId: workspaceId,
+            previous: state(viewOffset: 0),
+            next: next,
+            transition: next.offsetTransition,
+            at: 100
+        )
+        func offset(at time: TimeInterval) throws -> CGFloat {
+            try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: time).liveOffset)
+        }
+
+        XCTAssertEqual(try offset(at: 100.065), 0, accuracy: 0.001)
+
+        let firstTick = 100.07
+        XCTAssertEqual(driver.tickResult(in: workspaceId, at: firstTick), .running)
+        XCTAssertEqual(try offset(at: firstTick), 0, accuracy: 0.001)
+
+        let secondTick = firstTick + 1.0 / 120.0
+        XCTAssertEqual(driver.tickResult(in: workspaceId, at: secondTick), .running)
+        let second = try offset(at: secondTick)
+        XCTAssertGreaterThan(second, 0)
+        XCTAssertLessThan(second, 45)
+    }
+
+    func testSpringNeverReadsBehindItsLatestDisplayTick() throws {
+        let driver = AnimationDriver()
+        var next = state(viewOffset: 0)
+        next.springOffset(to: 900)
+        driver.reconcileViewportCommit(
+            workspaceId: workspaceId,
+            previous: state(viewOffset: 0),
+            next: next,
+            transition: next.offsetTransition,
+            at: 100
+        )
+        _ = driver.tickResult(in: workspaceId, at: 100)
+        _ = driver.tickResult(in: workspaceId, at: 100.05)
+        let ticked = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.05).liveOffset)
+
+        let between = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.04).liveOffset)
+
+        XCTAssertEqual(between, ticked, accuracy: 0.001)
+    }
+
+    func testScrollOverlayClipsColumnsHiddenAtRestWhereTheyFinish() {
+        func item(_ windowId: Int, _ frame: CGRect, hiddenAtRest: Bool) -> NiriScrollOverlay.Item {
+            NiriScrollOverlay.Item(
+                handle: WindowHandle(id: WindowToken(pid: 1, windowId: windowId)),
+                windowId: windowId,
+                frame: frame,
+                hiddenAtRest: hiddenAtRest
+            )
+        }
+        let visible = CGRect(x: 0, y: 0, width: 1000, height: 800)
+
+        let items = [
+            item(1, CGRect(x: -800, y: 0, width: 808, height: 800), hiddenAtRest: true),
+            item(2, CGRect(x: 20, y: 0, width: 960, height: 800), hiddenAtRest: false),
+            item(3, CGRect(x: 992, y: 0, width: 800, height: 800), hiddenAtRest: true),
+            item(4, CGRect(x: 2000, y: 0, width: 800, height: 800), hiddenAtRest: true)
+        ]
+
+        XCTAssertEqual(
+            NiriScrollOverlay.clipRect(for: items, in: visible, offset: 0),
+            CGRect(x: 8, y: 0, width: 984, height: 800)
+        )
+        XCTAssertEqual(
+            NiriScrollOverlay.clipRect(for: items, in: visible, offset: 100),
+            CGRect(x: 4, y: 0, width: 992, height: 800)
+        )
+        XCTAssertEqual(NiriScrollOverlay.clipRect(for: items, in: visible, offset: -500), visible)
+    }
+
+    func testHeldSpringStaysAtItsStartUntilTheHoldEnds() throws {
+        let driver = AnimationDriver()
+        var next = state(viewOffset: 0)
+        next.springOffset(to: 900)
+        driver.reconcileViewportCommit(
+            workspaceId: workspaceId,
+            previous: state(viewOffset: 0),
+            next: next,
+            transition: next.offsetTransition,
+            at: 100
+        )
+        _ = driver.tickResult(in: workspaceId, at: 100)
+        driver.holdMotionStart(in: workspaceId, until: 100.05)
+
+        let held = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.04).liveOffset)
+        let moving = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 100.06).liveOffset)
+
+        XCTAssertEqual(held, 0, accuracy: 0.001)
+        XCTAssertGreaterThan(moving, 0)
+    }
+
+    func testSpringResumesWhenNoDisplayTickArrives() throws {
+        let driver = AnimationDriver()
+        var next = state(viewOffset: 0)
+        next.springOffset(to: 900)
+        driver.reconcileViewportCommit(
+            workspaceId: workspaceId,
+            previous: state(viewOffset: 0),
+            next: next,
+            transition: next.offsetTransition,
+            at: 100
+        )
+
+        let offset = try XCTUnwrap(driver.renderOffsets(in: workspaceId, semanticOffset: 900, at: 105).liveOffset)
+
+        XCTAssertEqual(offset, 900, accuracy: 0.001)
+    }
+
     func testOffsetMutatorsAccumulateRebaseAndLastKindWins() {
         var state = state(viewOffset: 10)
 

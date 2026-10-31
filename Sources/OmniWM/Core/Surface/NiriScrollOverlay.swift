@@ -1,0 +1,368 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 OmniNull — https://github.com/OmniNull/OmniWM
+
+import AppKit
+import QuartzCore
+import ScreenCaptureKit
+
+// Experiment: draws a Niri viewport scroll from captured window images in one layer tree, so
+// every column lands in the same frame however slowly its app answers Accessibility writes.
+// The real windows settle behind the panel, which is removed once they have arrived.
+@MainActor
+final class NiriScrollOverlay {
+    struct Item {
+        let handle: WindowHandle
+        let windowId: Int
+        let frame: CGRect
+        let hiddenAtRest: Bool
+    }
+
+    private static let updateTimeout: TimeInterval = 0.4
+    private static let handoffTimeout: TimeInterval = 0.3
+    private static let handoffTolerance: CGFloat = 3
+    private static let desktopRefreshInterval: TimeInterval = 30
+    private static let clipOpeningDistance: CGFloat = 200
+    private static let previewRefreshInterval: TimeInterval = 20
+
+    private let ownedWindowRegistry: OwnedWindowRegistry
+    private let capture: OverviewThumbnailCapture
+    private let backdrop: WorkspaceSwipeBackdrop
+    private let hasCaptureAccess: @MainActor () -> Bool
+    private let windowBounds: @MainActor (UInt32) -> CGRect?
+    private var panel: WorkspaceSwipePreviewPanel?
+    private var panelFrame: CGRect = .zero
+    private var layers: [WindowHandle: CALayer] = [:]
+    private var openContainer: CALayer?
+    private var clippedContainer: CALayer?
+    private var clipMask: CALayer?
+    private var lastPresentedAt: TimeInterval = 0
+    private var watchdog: Task<Void, Never>?
+    private var handoff: Task<Void, Never>?
+    private var previewRequestedAt: [WindowHandle: TimeInterval] = [:]
+    private var desktopImage: CGImage?
+    private var desktopCapturedAt: TimeInterval = -.infinity
+    private var desktopCapture: Task<Void, Never>?
+
+    var isVisible: Bool {
+        panel != nil
+    }
+
+    init(
+        ownedWindowRegistry: OwnedWindowRegistry,
+        previewCapture: OverviewThumbnailCapture? = nil,
+        backdrop: WorkspaceSwipeBackdrop = WorkspaceSwipeBackdrop(),
+        hasCaptureAccess: @escaping @MainActor () -> Bool = { ScreenCapturePermissionMonitor.shared.isGranted },
+        windowBounds: @escaping @MainActor (UInt32) -> CGRect? = { SkyLight.shared.getWindowBounds($0) }
+    ) {
+        self.ownedWindowRegistry = ownedWindowRegistry
+        self.backdrop = backdrop
+        self.hasCaptureAccess = hasCaptureAccess
+        self.windowBounds = windowBounds
+        capture = previewCapture ?? OverviewThumbnailCapture(
+            consumer: .workspaceSwipe,
+            hasCaptureAccess: hasCaptureAccess,
+            adoptsProvisionalPreviews: false,
+            maximumRetainedBytes: 512 * 1_024 * 1_024
+        )
+        capture.onPreview = { [weak self] handle, frame in
+            self?.updatePreview(frame, for: handle)
+        }
+    }
+
+    isolated deinit {
+        stop()
+    }
+
+    static func presentedFrame(_ frame: CGRect, offset: CGFloat) -> CGRect {
+        frame.offsetBy(dx: offset, dy: 0)
+    }
+
+    // The scroll runs from the current offset to zero, so this is everywhere a window passes.
+    static func isSwept(_ frame: CGRect, offset: CGFloat, in visible: CGRect) -> Bool {
+        frame.union(presentedFrame(frame, offset: offset)).intersects(visible)
+    }
+
+    // Columns the settled layout hides would otherwise peek into the screen edges until the
+    // handoff. Their clip opens towards where they finish over the end of the scroll, so they
+    // slide to the real screen edge and the last frame still matches the real desktop.
+    static func clipRect(for items: [Item], in visible: CGRect, offset: CGFloat) -> CGRect {
+        let inset = max(0, 1 - abs(offset) / clipOpeningDistance)
+        var minX = visible.minX
+        var maxX = visible.maxX
+        for item in items where item.hiddenAtRest && item.frame.intersects(visible) {
+            if item.frame.midX < visible.midX {
+                minX = max(minX, visible.minX + (item.frame.maxX - visible.minX) * inset)
+            } else {
+                maxX = min(maxX, visible.maxX - (visible.maxX - item.frame.minX) * inset)
+            }
+        }
+        return CGRect(x: minX, y: visible.minY, width: max(0, maxX - minX), height: visible.height)
+    }
+
+    func warm(_ items: [Item], monitor: Monitor) {
+        guard panel == nil, hasCaptureAccess() else { return }
+        refreshDesktop(monitor: monitor)
+        // macOS badges every window while it is captured, so scrolls use existing images and
+        // they are only refreshed occasionally between scrolls.
+        let now = CACurrentMediaTime()
+        let due = items.filter {
+            capture.preview(for: $0.handle) == nil
+                || now - (previewRequestedAt[$0.handle] ?? -.infinity) >= Self.previewRefreshInterval
+        }
+        for item in due {
+            previewRequestedAt[item.handle] = now
+        }
+        request(due, monitor: monitor, firstFrameOnly: true)
+    }
+
+    func remove(token: WindowToken) {
+        previewRequestedAt = previewRequestedAt.filter { $0.key.token != token }
+        capture.remove(token: token)
+    }
+
+    func present(
+        _ items: [Item],
+        offset: CGFloat,
+        monitor: Monitor
+    ) -> Bool {
+        let visible = monitor.visibleFrame
+        let swept = items.filter { Self.isSwept($0.frame, offset: offset, in: visible) }
+        if panel == nil {
+            guard hasCaptureAccess(), let backdropImage = desktopImage ?? backdrop.image(for: monitor) else {
+                return false
+            }
+            guard swept.allSatisfy({ capture.preview(for: $0.handle) != nil }) else {
+                request(swept, monitor: monitor, firstFrameOnly: true)
+                return false
+            }
+            show(backdropImage: backdropImage, monitor: monitor)
+        }
+        handoff?.cancel()
+        handoff = nil
+        lastPresentedAt = CACurrentMediaTime()
+        place(swept, offset: offset, clip: Self.clipRect(for: items, in: visible, offset: offset))
+        return true
+    }
+
+    func finish(settling items: [Item]) {
+        guard panel != nil else { return }
+        watchdog?.cancel()
+        watchdog = nil
+        let expected = items.filter { $0.frame.intersects(panelFrame) }
+        place(expected, offset: 0, clip: Self.clipRect(for: items, in: panelFrame, offset: 0))
+        handoff?.cancel()
+        handoff = Task { [weak self] in
+            let deadline = CACurrentMediaTime() + Self.handoffTimeout
+            while !Task.isCancelled, CACurrentMediaTime() < deadline {
+                guard let self, !arrived(expected) else { break }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(32))
+            guard !Task.isCancelled else { return }
+            self?.stop()
+        }
+    }
+
+    func stop() {
+        watchdog?.cancel()
+        watchdog = nil
+        handoff?.cancel()
+        handoff = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let panel {
+            ownedWindowRegistry.unregister(panel)
+            panel.orderOut(nil)
+            panel.close()
+        }
+        panel = nil
+        layers.removeAll()
+        openContainer = nil
+        clippedContainer = nil
+        clipMask = nil
+        capture.clear()
+        CATransaction.commit()
+    }
+
+    func release() {
+        stop()
+        desktopCapture?.cancel()
+        desktopCapture = nil
+        desktopImage = nil
+        backdrop.clear()
+        capture.releaseCache(reason: .shutdown)
+    }
+
+    private func refreshDesktop(monitor: Monitor) {
+        guard desktopCapture == nil,
+              CACurrentMediaTime() - desktopCapturedAt >= Self.desktopRefreshInterval
+        else { return }
+        desktopCapture = Task { [weak self] in
+            let image = await Self.captureDesktop(monitor: monitor)
+            guard let self else { return }
+            desktopCapture = nil
+            desktopCapturedAt = CACurrentMediaTime()
+            if let image {
+                desktopImage = image
+            }
+        }
+    }
+
+    // The desktop layers include widgets and the darkening macOS draws under the menu bar,
+    // neither of which is in the wallpaper window's own image.
+    private static func captureDesktop(monitor: Monitor) async -> CGImage? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = content.displays.first(where: { $0.displayID == monitor.displayId }) else {
+                return nil
+            }
+            let scale = Self.scale(for: monitor)
+            let config = SCStreamConfiguration()
+            config.width = Int(ceil(monitor.frame.width * scale))
+            config.height = Int(ceil(monitor.frame.height * scale))
+            config.showsCursor = false
+            config.capturesAudio = false
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: SCContentFilter(
+                    display: display,
+                    including: content.windows.filter { $0.windowLayer < 0 }
+                ),
+                configuration: config
+            )
+        } catch {
+            ScreenCapturePermissionMonitor.shared.noteCaptureFailure(error)
+            return nil
+        }
+    }
+
+    private func arrived(_ items: [Item]) -> Bool {
+        items.allSatisfy { item in
+            guard let bounds = windowBounds(UInt32(item.windowId)) else { return true }
+            let target = ScreenCoordinateSpace.toWindowServer(rect: item.frame)
+            return abs(bounds.minX - target.minX) <= Self.handoffTolerance
+                && abs(bounds.minY - target.minY) <= Self.handoffTolerance
+        }
+    }
+
+    private func request(_ items: [Item], monitor: Monitor, firstFrameOnly: Bool) {
+        let scale = Self.scale(for: monitor)
+        capture.reconcile(
+            represented: Set(items.map(\.handle)),
+            visible: items.map {
+                OverviewPreviewRequest(
+                    handle: $0.handle,
+                    pixelWidth: Int(ceil($0.frame.width * scale)),
+                    pixelHeight: Int(ceil($0.frame.height * scale))
+                )
+            },
+            retainingUnrepresentedPreviews: true,
+            firstFrameOnly: firstFrameOnly
+        )
+    }
+
+    private func show(backdropImage: CGImage, monitor: Monitor) {
+        let frame = monitor.visibleFrame
+        let panel = WorkspaceSwipePreviewPanel(frame: frame)
+        let root = CALayer()
+        root.frame = CGRect(origin: .zero, size: frame.size)
+        root.masksToBounds = true
+        let view = NSView(frame: root.frame)
+        view.wantsLayer = true
+        view.layer = root
+        panel.contentView = view
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let backdropLayer = CALayer()
+        backdropLayer.frame = monitor.frame.offsetBy(dx: -frame.minX, dy: -frame.minY)
+        backdropLayer.contentsGravity = .resizeAspectFill
+        backdropLayer.contents = backdropImage
+        root.addSublayer(backdropLayer)
+        let open = CALayer()
+        open.frame = root.bounds
+        let clipped = CALayer()
+        clipped.frame = root.bounds
+        let mask = CALayer()
+        mask.backgroundColor = NSColor.black.cgColor
+        mask.frame = root.bounds
+        clipped.mask = mask
+        root.addSublayer(clipped)
+        root.addSublayer(open)
+        openContainer = open
+        clippedContainer = clipped
+        clipMask = mask
+        CATransaction.commit()
+
+        self.panel = panel
+        panelFrame = frame
+        ownedWindowRegistry.register(
+            panel,
+            surfaceId: "niri-scroll-overlay-\(monitor.displayId)",
+            policy: SurfacePolicy(
+                kind: .workspaceSwipe,
+                hitTestPolicy: .passthrough,
+                capturePolicy: .included,
+                suppressesManagedFocusRecovery: false
+            )
+        )
+        panel.orderFrontRegardless()
+        startWatchdog()
+    }
+
+    private func startWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled, let self else { return }
+                if CACurrentMediaTime() - lastPresentedAt > Self.updateTimeout {
+                    stop()
+                    return
+                }
+            }
+        }
+    }
+
+    private func place(_ items: [Item], offset: CGFloat, clip: CGRect) {
+        guard let root = panel?.contentView?.layer, let openContainer, let clippedContainer else { return }
+        let scale = root.contentsScale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        clipMask?.frame = clip.offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
+        for item in items {
+            let layer: CALayer
+            if let existing = layers[item.handle] {
+                layer = existing
+            } else {
+                guard let preview = capture.preview(for: item.handle) else { continue }
+                layer = CALayer()
+                layer.contentsGravity = .resize
+                layer.contentsScale = scale
+                layer.contents = preview.surface
+                layer.contentsRect = preview.contentsRect
+                layers[item.handle] = layer
+            }
+            let container = item.hiddenAtRest ? clippedContainer : openContainer
+            if layer.superlayer !== container {
+                container.addSublayer(layer)
+            }
+            layer.frame = Self.presentedFrame(item.frame, offset: offset)
+                .offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
+        }
+        CATransaction.commit()
+    }
+
+    private func updatePreview(_ frame: OverviewPreviewFrame?, for handle: WindowHandle) {
+        guard let frame, let layer = layers[handle] else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.contents = frame.surface
+        layer.contentsRect = frame.contentsRect
+        CATransaction.commit()
+    }
+
+    private static func scale(for monitor: Monitor) -> CGFloat {
+        NSScreen.screens.first(where: { $0.displayId == monitor.displayId })?.backingScaleFactor ?? 1
+    }
+}

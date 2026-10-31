@@ -166,6 +166,7 @@ extension NiriLayoutHandler {
             ),
             diff: diff,
             isAnimationTick: sampledAnimationTime != nil,
+            continuesMotion: animationTime == nil && !isSettled && !isInteractiveResize,
             isInteractiveResize: isInteractiveResize,
             isActiveWorkspace: snapshot.isActiveWorkspace
         )
@@ -378,6 +379,54 @@ extension NiriLayoutHandler {
             isSettled: true
         )
         return visibleOnly ? result.frames.filter { result.hiddenHandles[$0.key] == nil } : result.frames
+    }
+
+    // Every tiled window where it sits once the viewport reaches its target, with columns
+    // outside the viewport left in strip position instead of parked at a screen edge, and
+    // whether the settled layout keeps it there.
+    func stripFrames(in workspaceId: WorkspaceDescriptor.ID) -> [WindowToken: (frame: CGRect, hiddenAtRest: Bool)]? {
+        guard let controller,
+              let engine = controller.niriEngine,
+              let monitor = controller.workspaceManager.monitor(for: workspaceId),
+              let snapshot = makeWorkspaceSnapshot(
+                  workspaceId: workspaceId,
+                  monitor: monitor,
+                  options: SnapshotOptions(
+                      viewportState: controller.workspaceManager.niriViewportState(for: workspaceId),
+                      useScrollAnimationPath: true,
+                      removalSeed: nil,
+                      isActiveWorkspace: controller.workspaceManager.activeWorkspaceOrFirst(on: monitor.id)?.id
+                          == workspaceId
+                  )
+              )
+        else {
+            return nil
+        }
+        let settled = calculateOnDemandFrames(
+            snapshot: snapshot,
+            engine: engine,
+            monitor: monitor,
+            sampledAnimationTime: Self.afterAnyMotion,
+            isSettled: true
+        )
+        let settledFrames = settled.frames
+        let settledHidden = settled.hiddenHandles
+        engine.revealsAllColumns = true
+        defer { engine.revealsAllColumns = false }
+        let strip = calculateOnDemandFrames(
+            snapshot: snapshot,
+            engine: engine,
+            monitor: monitor,
+            sampledAnimationTime: Self.afterAnyMotion,
+            isSettled: false
+        )
+        var frames: [WindowToken: (frame: CGRect, hiddenAtRest: Bool)] = [:]
+        for (token, frame) in strip.frames where strip.hiddenHandles[token] == nil {
+            let rests = settledHidden[token] == nil
+                && settledFrames[token]?.approximatelyEqual(to: frame, tolerance: 1) == true
+            frames[token] = (frame, !rests)
+        }
+        return frames
     }
 
     private func calculateOnDemandFrames(
