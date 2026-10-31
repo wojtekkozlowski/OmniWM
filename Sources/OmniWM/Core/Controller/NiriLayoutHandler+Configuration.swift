@@ -27,6 +27,7 @@ extension NiriLayoutHandler {
         guard let controller, let engine = controller.niriEngine else { return }
 
         let currentMonitors = controller.workspaceManager.monitors
+        NiriDisplayNeighbors.displayFrames = currentMonitors.map(\.frame)
         var orientations: [Monitor.ID: Monitor.Orientation] = [:]
         orientations.reserveCapacity(currentMonitors.count)
         for monitor in currentMonitors {

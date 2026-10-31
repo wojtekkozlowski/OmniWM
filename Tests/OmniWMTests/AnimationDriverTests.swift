@@ -50,6 +50,20 @@ final class AnimationDriverTests: XCTestCase {
         XCTAssertFalse(item(from: CGRect(x: 900, y: 0, width: 400, height: 800)).keepsSize)
     }
 
+    func testDisplayNeighborsFindDisplaysBesideTheWorkingFrame() {
+        defer { NiriDisplayNeighbors.displayFrames = [] }
+        let working = CGRect(x: 0, y: 0, width: 3440, height: 1410)
+        NiriDisplayNeighbors.displayFrames = [
+            CGRect(x: 0, y: 0, width: 3440, height: 1440),
+            CGRect(x: -1800, y: -931, width: 1800, height: 1169)
+        ]
+        XCTAssertEqual(NiriDisplayNeighbors.edges(of: working).minimum, true)
+        XCTAssertEqual(NiriDisplayNeighbors.edges(of: working).maximum, false)
+
+        NiriDisplayNeighbors.displayFrames = [CGRect(x: 0, y: 0, width: 3440, height: 1440)]
+        XCTAssertEqual(NiriDisplayNeighbors.edges(of: working).minimum, false)
+    }
+
     func testScrollOverlayRejectsImagesOfAnotherShape() {
         let frame = CGRect(x: 0, y: 0, width: 870, height: 1092)
 

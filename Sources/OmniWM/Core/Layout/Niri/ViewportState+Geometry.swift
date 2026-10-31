@@ -353,7 +353,56 @@ extension ViewportState {
         if shouldCenter {
             return areas.centeredOffset(currentViewStart: currentViewStart, target: target, gap: context.gaps)
         }
-        return areas.fitOffset(currentViewStart: currentViewStart, target: target, gap: context.gaps)
+        return fitOffsetAvoidingNeighboringDisplays(
+            areas: areas,
+            currentViewStart: currentViewStart,
+            target: target,
+            containers: containers,
+            context: context,
+            viewportSpan: viewportSpan
+        ) ?? areas.fitOffset(currentViewStart: currentViewStart, target: target, gap: context.gaps)
+    }
+
+    // A column hanging over an edge that touches another display has to be hidden, or it
+    // would show on that display, which leaves an empty area where it was. Aligning the target
+    // with that edge instead keeps the viewport filled.
+    private func fitOffsetAvoidingNeighboringDisplays(
+        areas: ViewportFittingAreas,
+        currentViewStart: CGFloat,
+        target: ViewportColumnTarget,
+        containers: [NiriContainer],
+        context: NiriInteractionContext,
+        viewportSpan: CGFloat
+    ) -> CGFloat? {
+        guard context.orientation == .horizontal, viewportSpan > target.span else { return nil }
+        let neighbors = NiriDisplayNeighbors.edges(of: context.workingFrame)
+        guard neighbors.minimum || neighbors.maximum else { return nil }
+        let sizeKeyPath = context.orientation.settledSpanKeyPath
+        let fitted = areas.fitOffset(currentViewStart: currentViewStart, target: target, gap: context.gaps)
+        let viewStart = target.position + fitted
+        let viewEnd = viewStart + viewportSpan
+        let spans = containers.indices.map { index in
+            let position = containerPosition(
+                at: index,
+                containers: containers,
+                gap: context.gaps,
+                sizeKeyPath: sizeKeyPath
+            )
+            return (start: position, end: position + containers[index][keyPath: sizeKeyPath])
+        }
+        if neighbors.minimum, spans[..<target.index].contains(where: { $0.start < viewStart && $0.end > viewStart }) {
+            return areas.fitOffset(currentViewStart: target.position, target: target, gap: context.gaps)
+        }
+        if neighbors.maximum,
+           spans[(target.index + 1)...].contains(where: { $0.start < viewEnd && $0.end > viewEnd })
+        {
+            return areas.fitOffset(
+                currentViewStart: target.position + target.span - viewportSpan,
+                target: target,
+                gap: context.gaps
+            )
+        }
+        return nil
     }
 
     private func shouldCenterAdjacentPair(

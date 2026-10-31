@@ -18,6 +18,16 @@ extension SkyLight {
         return Self.crop(image, from: wallpaper.frame, to: frame)
     }
 
+    // Only what is on screen is captured, so a window partly off screen comes back cropped.
+    func captureOnScreenWindow(_ windowId: UInt32) -> CGImage? {
+        guard let capture = surfaces.captureWindowList else { return nil }
+        var windowId = windowId
+        guard let images = capture(getMainConnectionID(), &windowId, 1, 1 << 11)?.takeRetainedValue() else {
+            return nil
+        }
+        return Self.firstCapturedImage(in: images)
+    }
+
     static func wallpaperWindow(in windows: [[String: Any]], frame: CGRect) -> (id: UInt32, frame: CGRect)? {
         let levels = (CGWindowLevelForKey(.desktopWindow) - 1) ..< CGWindowLevelForKey(.desktopIconWindow)
         for window in windows {

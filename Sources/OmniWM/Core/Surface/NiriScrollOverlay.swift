@@ -54,6 +54,8 @@ final class NiriScrollOverlay {
     private var watchdog: Task<Void, Never>?
     private var handoff: Task<Void, Never>?
     private var previewRequestedAt: [WindowHandle: TimeInterval] = [:]
+    private var capturedImages: [WindowHandle: CGImage] = [:]
+    private let captureWindow: @MainActor (UInt32) -> CGImage?
     private var desktopImage: CGImage?
     private var desktopCapturedAt: TimeInterval = -.infinity
     private var desktopCapture: Task<Void, Never>?
@@ -67,8 +69,10 @@ final class NiriScrollOverlay {
         previewCapture: OverviewThumbnailCapture? = nil,
         backdrop: WorkspaceSwipeBackdrop = WorkspaceSwipeBackdrop(),
         hasCaptureAccess: @escaping @MainActor () -> Bool = { ScreenCapturePermissionMonitor.shared.isGranted },
-        windowBounds: @escaping @MainActor (UInt32) -> CGRect? = { SkyLight.shared.getWindowBounds($0) }
+        windowBounds: @escaping @MainActor (UInt32) -> CGRect? = { SkyLight.shared.getWindowBounds($0) },
+        captureWindow: @escaping @MainActor (UInt32) -> CGImage? = { SkyLight.shared.captureOnScreenWindow($0) }
     ) {
+        self.captureWindow = captureWindow
         self.ownedWindowRegistry = ownedWindowRegistry
         self.backdrop = backdrop
         self.hasCaptureAccess = hasCaptureAccess
@@ -97,13 +101,30 @@ final class NiriScrollOverlay {
             && abs(frame.width / aspect - frame.height) <= maximumShapeMismatch
     }
 
-    private func fittingPreview(for item: Item) -> OverviewPreviewFrame? {
+    private func image(for item: Item) -> (contents: Any, contentsRect: CGRect)? {
+        if let captured = capturedImages[item.handle],
+           Self.imageFits(imageSize: CGSize(width: captured.width, height: captured.height), frame: item.frame)
+        {
+            return (captured, CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
         guard let preview = capture.preview(for: item.handle) else { return nil }
         let imageSize = CGSize(
             width: CGFloat(preview.surface.width) * preview.contentsRect.width,
             height: CGFloat(preview.surface.height) * preview.contentsRect.height
         )
-        return Self.imageFits(imageSize: imageSize, frame: item.frame) ? preview : nil
+        return Self.imageFits(imageSize: imageSize, frame: item.frame) ? (preview.surface, preview.contentsRect) : nil
+    }
+
+    // A window fully on screen can show anything by now, so it is captured as the motion
+    // starts. Keeping the image means it still looks current if it returns after parking.
+    private func captureOnScreenWindows(_ items: [Item], in visible: CGRect) {
+        for item in items where visible.contains(item.presented) {
+            if let captured = captureWindow(UInt32(item.windowId)),
+               Self.imageFits(imageSize: CGSize(width: captured.width, height: captured.height), frame: item.frame)
+            {
+                capturedImages[item.handle] = captured
+            }
+        }
     }
 
     // Columns the settled layout hides would otherwise peek into the screen edges until the
@@ -129,9 +150,13 @@ final class NiriScrollOverlay {
         // macOS badges every window while it is captured, so scrolls use existing images and
         // they are only refreshed occasionally between scrolls.
         let now = CACurrentMediaTime()
+        let visible = monitor.visibleFrame
         let due = items.filter {
-            fittingPreview(for: $0) == nil
-                || now - (previewRequestedAt[$0.handle] ?? -.infinity) >= Self.previewRefreshInterval
+            !visible.contains($0.presented) && (
+                image(for: $0) == nil
+                    || (capturedImages[$0.handle] == nil
+                        && now - (previewRequestedAt[$0.handle] ?? -.infinity) >= Self.previewRefreshInterval)
+            )
         }
         for item in due {
             previewRequestedAt[item.handle] = now
@@ -141,23 +166,27 @@ final class NiriScrollOverlay {
 
     func remove(token: WindowToken) {
         previewRequestedAt = previewRequestedAt.filter { $0.key.token != token }
+        capturedImages = capturedImages.filter { $0.key.token != token }
         capture.remove(token: token)
     }
 
     func present(_ items: [Item], monitor: Monitor) -> Bool {
         let visible = monitor.visibleFrame
         let swept = items.filter { $0.isSwept(in: visible) }
-        guard swept.allSatisfy({ fittingPreview(for: $0) != nil }) else {
-            if panel == nil {
-                request(swept, monitor: monitor, firstFrameOnly: true)
-            }
-            return false
-        }
         if panel == nil {
             guard hasCaptureAccess(), let backdropImage = desktopImage ?? backdrop.image(for: monitor) else {
                 return false
             }
+            let parked = swept.filter { !visible.contains($0.presented) }
+            guard parked.allSatisfy({ image(for: $0) != nil }) else {
+                request(parked.filter { image(for: $0) == nil }, monitor: monitor, firstFrameOnly: true)
+                return false
+            }
+            captureOnScreenWindows(swept, in: visible)
+            guard swept.allSatisfy({ image(for: $0) != nil }) else { return false }
             show(backdropImage: backdropImage, monitor: monitor)
+        } else if !swept.allSatisfy({ image(for: $0) != nil }) {
+            return false
         }
         handoff?.cancel()
         handoff = nil
@@ -172,7 +201,7 @@ final class NiriScrollOverlay {
         watchdog?.cancel()
         watchdog = nil
         let expected = items.filter { $0.frame.intersects(panelFrame) }
-        guard expected.allSatisfy({ fittingPreview(for: $0) != nil }) else {
+        guard expected.allSatisfy({ image(for: $0) != nil }) else {
             stop()
             return
         }
@@ -370,12 +399,12 @@ final class NiriScrollOverlay {
             if let existing = layers[item.handle] {
                 layer = existing
             } else {
-                guard let preview = fittingPreview(for: item) else { continue }
+                guard let image = image(for: item) else { continue }
                 layer = CALayer()
                 layer.contentsGravity = .resize
                 layer.contentsScale = scale
-                layer.contents = preview.surface
-                layer.contentsRect = preview.contentsRect
+                layer.contents = image.contents
+                layer.contentsRect = image.contentsRect
                 layers[item.handle] = layer
             }
             let container = item.hiddenAtRest ? clippedContainer : openContainer
@@ -389,7 +418,7 @@ final class NiriScrollOverlay {
     }
 
     private func updatePreview(_ frame: OverviewPreviewFrame?, for handle: WindowHandle) {
-        guard let frame, let layer = layers[handle] else { return }
+        guard let frame, capturedImages[handle] == nil, let layer = layers[handle] else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.contents = frame.surface

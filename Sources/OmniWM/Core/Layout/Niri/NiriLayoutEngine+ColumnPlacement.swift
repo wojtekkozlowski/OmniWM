@@ -109,7 +109,7 @@ extension NiriLayoutEngine {
         let visibility = pass.viewport.columnVisibility(
             for: prepared, at: index, viewPosition: pass.viewPosition,
             hiddenPlacementMonitor: pass.context.hiddenPlacementMonitor,
-            hiddenPlacementMonitors: pass.context.hiddenPlacementMonitors
+            hiddenPlacementMonitors: revealsAllColumns ? [] : pass.context.hiddenPlacementMonitors
         )
         let renderedRect = renderedColumnFrame(column, at: index, visibility: visibility, pass: pass, result: &result)
         layoutContainer(
