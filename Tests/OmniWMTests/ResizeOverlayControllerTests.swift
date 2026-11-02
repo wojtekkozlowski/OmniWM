@@ -191,8 +191,10 @@ final class ResizeOverlayControllerTests: XCTestCase {
         XCTAssertEqual(frameApplicationEvents(fixture).count, 0, "relayout during the animation must be held")
         XCTAssertTrue(overlay.isTracking(fixture.workspaceId))
 
+        // A spring's clock starts at the first display tick, so the motion shows from the second.
         let heldFrames = overlay.panels.mapValues(\.targetFrame)
         handler.tickScrollAnimation(targetTime: CACurrentMediaTime() + 0.03, displayId: fixture.monitor.displayId)
+        handler.tickScrollAnimation(targetTime: CACurrentMediaTime() + 0.06, displayId: fixture.monitor.displayId)
         XCTAssertNotEqual(overlay.panels.mapValues(\.targetFrame), heldFrames)
         XCTAssertFalse(overlay.panels.isEmpty)
         XCTAssertEqual(frameApplicationEvents(fixture).count, 0)
