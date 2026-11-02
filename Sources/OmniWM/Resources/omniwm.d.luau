@@ -46,7 +46,7 @@ export type ShapeSource = {
     pads: { left: number?, right: number?, top: number?, bottom: number? }?,
     adhere: { left: number?, right: number?, top: number?, bottom: number? }?,
 }
-export type ShapeTrigger = { shape: string, at: number, rising: boolean?, contact: boolean? }
+export type ShapeTrigger = { shape: string, at: number, rising: boolean?, contact: boolean? } | { beat: true }
 export type ShapeMorph = {
     anchor: { x: number, y: number }?, stops: { ShapeMorphStop }?, stretch: ShapeStretch?,
     impulses: { ShapeImpulse }?, edges: ShapeEdges?, source: ShapeSource?, trigger: ShapeTrigger?,
@@ -958,8 +958,8 @@ export type ShapeProps = {
     hit: boolean?,
     shadowOffset: { x: number, y: number }?,
     morph: ShapeMorph?,
-    spectrum: { band: number, gain: number?, taper: number?, inset: number?, threshold: number?,
-        response: number?, bounce: number? }?,
+    spectrum: { band: number?, gain: number?, taper: number?, inset: number?, threshold: number?,
+        response: number?, bounce: number?, swell: { w: number, h: number }? }?,
 }
 
 export type ComponentProps = Props & {

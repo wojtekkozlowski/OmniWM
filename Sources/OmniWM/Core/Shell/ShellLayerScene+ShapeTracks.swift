@@ -4,8 +4,12 @@
 import QuartzCore
 
 extension ShellLayerScene {
+    func now() -> CFTimeInterval {
+        submitTime ?? CACurrentMediaTime()
+    }
+
     func prepareShapeTracks(animated: Bool) {
-        let now = CACurrentMediaTime()
+        let now = self.now()
         for (slot, shape) in glassShapes where shapeTracks.entries[slot]?.carrier == nil {
             let tracked = presence.reveals[slot] != nil || shapeTracks.follows[slot]?.radius != nil
             guard let body = parents[slot], glassBodies[body] != nil,
@@ -61,7 +65,7 @@ extension ShellLayerScene {
     ) {
         let source = shapeRevealSource(shape.slot)
         let sourcePlan = source.flatMap { presence.revealPlans[$0]?.plan }
-        let supplied = morph.trigger == nil ? sourcePlan : nil
+        let supplied = morph.waits ? nil : sourcePlan
         let now = sourcePlan?.commit ?? time
         var old = shapeTracks.entries[shape.slot]
         if old == nil, let identity = presence.identities[shape.slot], let retired = shapeTracks.retired[identity],
@@ -71,7 +75,7 @@ extension ShellLayerScene {
             glassBodies[body]?.rekeyShape(from: retired, to: shape.slot)
             discardShapeCarrier(retired, removeNative: false)
         }
-        let sourceChanged = morph.trigger == nil && old.map { $0.root != source } == true
+        let sourceChanged = !morph.waits && old.map { $0.root != source } == true
         let geometryChanged = old
             .map {
                 ($0.base.target.kind != shape.kind || ShellShapeBaseMotion
@@ -163,7 +167,7 @@ extension ShellLayerScene {
         _ entry: inout ShellShapeTrackEntry, from old: ShellShapeTrackEntry?, at time: CFTimeInterval
     ) {
         let carried = old?.impulses.compactMap { $0.carrying(at: time) } ?? []
-        if entry.morph.trigger != nil, entry.plan == nil {
+        if entry.morph.waits, entry.plan == nil {
             entry.impulses = old?.impulses ?? []
             replanPulseImpulses(&entry, at: time)
             return
@@ -230,6 +234,29 @@ extension ShellLayerScene {
         entry.dirty = true
         replanShapeImpulses(&entry, from: nil, at: crossing)
         if !animated { entry.begin = entry.end }
+    }
+
+    func startBeats(at time: CFTimeInterval) -> Bool {
+        let bass = ShellSpectrumShapeRecipe.bass(ShellSpectrumShapeRecipe.resample(spectrum.bands.current))
+        guard bass > ShellSpectrumShapeStore.beatThreshold else {
+            spectrum.armed = true
+            return false
+        }
+        guard spectrum.armed else { return false }
+        spectrum.armed = false
+        guard spectrum.motion.animationsEnabled else { return false }
+        var started = false
+        for (slot, var entry) in shapeTracks.entries where entry.morph.beat && entry.carrier == nil {
+            guard let reveal = presence.reveals[slot] else { continue }
+            let spring = ShellMorphRecipe.Spring(response: reveal.response, bounce: reveal.bounce).parameters
+            entry.plan = ShellReveal(begin: time, progress: 0, target: 1, spring: spring)
+            entry.begin = time
+            entry.dirty = true
+            replanShapeImpulses(&entry, from: nil, at: time)
+            shapeTracks.entries[slot] = entry
+            started = true
+        }
+        return started
     }
 
     private func shapeTriggerSource(_ key: UInt64) -> (key: Int32, value: ShellShapeTrackEntry)? {

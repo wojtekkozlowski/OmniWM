@@ -190,7 +190,10 @@ final class ShellSpectrumShapeTests: XCTestCase {
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
                     fixture.widget.surface.scene.spectrum.bands.store(.init(repeating: level))
-                    XCTAssertEqual(fixture.widget.surface.scene.stepSpectrum(at: CACurrentMediaTime()), 47)
+                    XCTAssertEqual(
+                        fixture.widget.surface.scene.stepSpectrum(at: CACurrentMediaTime()),
+                        fixture.widget.surface.scene.spectrum.bindings.count
+                    )
                     CATransaction.commit()
                 }
             }
@@ -204,9 +207,13 @@ final class ShellSpectrumShapeTests: XCTestCase {
         let lua = luaFixture.widget
         let native = nativeFixture.widget
         let slots = try (0 ..< 47).map { try VitreusFixture.element(native, key: "visualiser-column-\($0)").slot }
-        ShellLayerScene.engineQueue.sync { XCTAssertEqual(native.surface.scene.spectrum.bindings.count, 47) }
+        let swell = try VitreusFixture.element(native, key: "shell").slot
+        ShellLayerScene.engineQueue.sync {
+            XCTAssertEqual(Set(native.surface.scene.spectrum.bindings.keys), Set(slots + [swell]))
+        }
         var records: [[String: Any]] = []
-        for run in 0 ..< 3 {
+        let probeOutput = ProcessInfo.processInfo.environment["OMNI_D7_ROUTE_PROBE_OUT"]
+        for run in 0 ..< (probeOutput == nil ? 1 : 3) {
             for arm in run.isMultiple(of: 2) ? ["luau", "native"] : ["native", "luau"] {
                 let cost = measureRoute(arm == "luau" ? luaFixture : nativeFixture, luau: arm == "luau")
                 records.append([
@@ -228,7 +235,7 @@ final class ShellSpectrumShapeTests: XCTestCase {
                 ShellVitreusBarTests.assertRect(target.rect, expected.rect, "column \(index)")
             }
         }
-        if let output = ProcessInfo.processInfo.environment["OMNI_D7_ROUTE_PROBE_OUT"] {
+        if let output = probeOutput {
             try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys])
                 .write(to: URL(fileURLWithPath: output))
         }
